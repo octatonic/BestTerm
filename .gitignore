@@ -1,0 +1,38 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock IS committed: this workspace produces binaries, not a library.
+# (see https://doc.rust-lang.org/cargo/faq.html#why-do-binaries-have-cargolock-in-version-control-but-not-libraries)
+
+# Build / packaging output
+/dist/
+/packaging/out/
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.sample.json
+.idea/
+*.swp
+*~
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Local developer overrides
+/.env
+/.env.local
+bestterm.local.toml
+
+# UI parity reference captures: large PNGs of the reference application.
+# Kept out of git; see docs/ui-parity.md for how to regenerate them locally.
+/docs/ui-parity/captures/*.png
+/docs/ui-parity/captures/*.jpg
+
+# Snapshot test failures
+**/snapshots/*.new.png
+**/snapshots/*.diff.png

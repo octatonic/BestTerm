@@ -1,0 +1,76 @@
+[workspace]
+resolver = "3"
+members = ["apps/*", "crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/octatonic/BestTerm"
+homepage = "https://github.com/octatonic/BestTerm"
+authors = ["BestTerm contributors"]
+
+[workspace.dependencies]
+# ---- internal crates ------------------------------------------------------
+bestterm-transport = { path = "crates/transport", version = "0.1.0" }
+bestterm-surface = { path = "crates/surface", version = "0.1.0" }
+bestterm-core-pty = { path = "crates/core-pty", version = "0.1.0" }
+bestterm-core-terminal = { path = "crates/core-terminal", version = "0.1.0" }
+bestterm-term-render = { path = "crates/term-render", version = "0.1.0" }
+bestterm-ui-chrome = { path = "crates/ui-chrome", version = "0.1.0" }
+bestterm-app-ui = { path = "crates/app-ui", version = "0.1.0" }
+
+# ---- terminal core --------------------------------------------------------
+# Apache-2.0. Wrapped behind bestterm_core_terminal::TerminalEmulator so it can
+# be swapped for libghostty-vt later without touching the UI (see ARCHITECTURE.md).
+alacritty_terminal = "0.26"
+# MIT. ConPTY on Windows, unix ptys elsewhere, behind one trait.
+portable-pty = "0.9"
+
+# ---- GUI ------------------------------------------------------------------
+# egui/eframe are MIT OR Apache-2.0.
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = [
+    "default_fonts",
+    "wgpu",
+    "wayland",
+    "x11",
+] }
+egui_extras = "0.36"
+egui_dock = "0.21"
+
+# ---- foundations ----------------------------------------------------------
+anyhow = "1.0"
+thiserror = "2.0"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+bitflags = "2.13"
+unicode-width = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1"
+directories = "6.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# The UI layer legitimately holds wide match statements over key codes.
+match_same_arms = "allow"
+
+# Debug builds of a terminal emulator are unusable without some optimisation in
+# the VT and rendering paths, but full opt makes iteration slow. Optimise only
+# the dependencies, which is where the hot loops live during development.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

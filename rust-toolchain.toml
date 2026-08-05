@@ -1,0 +1,7 @@
+# Pinned once the first green CI run establishes a known-good stable version.
+# Until then `stable` avoids pinning the whole team to a version nobody has verified.
+# alacritty_terminal 0.26 requires rust-version >= 1.85 (edition 2024).
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "default"

@@ -1,0 +1,58 @@
+# cargo-deny configuration.
+#
+# BestTerm is licensed GPL-3.0-or-later. That makes license hygiene a build
+# concern rather than a paperwork concern: a dependency whose licence is
+# incompatible with GPLv3 cannot be linked at all, and GPLv2-only is the trap to
+# watch for (it is *not* compatible with GPLv3).
+#
+# Run locally with:  cargo deny check
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+# Permissive and GPLv3-compatible licences only. Anything not on this list must
+# be justified in a PR and added deliberately.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "MPL-2.0",
+    "GPL-3.0",
+    "GPL-3.0-or-later",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-or-later",
+    "OpenSSL",
+    "BSL-1.0",
+]
+confidence-threshold = 0.9
+
+# GPLv2-only is deliberately absent from `allow`: linking it into a GPLv3
+# program is not permitted. If a dependency turns out to be "GPL-2.0-or-later"
+# that IS acceptable and should be added explicitly with a note.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Keep exactly one copy of the heavy graphics and async stacks.
+deny = []
+skip-tree = []
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
