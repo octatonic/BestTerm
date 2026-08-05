@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | `sessions.toml` | config | yes — this is the tree people want in git |
 //! | `settings.toml` | config | yes |
+//! | `vault.toml` | config | yes — encrypted, and it belongs with the sessions it serves |
 //! | `layout.toml` | state | no — a layout from another monitor setup is worse than none |
 //!
 //! Every file carries a schema `version`, is migrated forward one step at a time with the original
@@ -44,6 +45,7 @@ pub mod paths;
 mod sessions;
 pub mod settings;
 pub mod store;
+mod vault;
 
 pub use layout::{
     LayoutDoc, PaneContent, PaneNode, SidebarLayout, SplitAxis, TabLayout, WindowLayout,
@@ -53,6 +55,7 @@ pub use settings::{AppSettings, BehaviourSettings, BellStyle, CursorStyle, Termi
 pub use store::{ConfigError, ConfigResult, Document, Migration};
 
 use bestterm_core_model::{NodeId, ResolvedSettings, SessionTree, TreeDoc};
+use bestterm_core_vault::VaultFile;
 
 /// Reads and writes BestTerm's configuration.
 ///
@@ -115,6 +118,31 @@ impl ConfigStore {
         store::save(&self.paths.layout(), layout)
     }
 
+    /// Whether a vault has been set up.
+    ///
+    /// Asked before prompting: there is no point demanding a master password for a vault that does
+    /// not exist yet, and no point offering to create one over a vault that does.
+    pub fn has_vault(&self) -> bool {
+        store::exists(&self.paths.vault())
+    }
+
+    /// Load the stored vault, or `None` when none has been created.
+    ///
+    /// Returns the encrypted file, not an open vault: unlocking needs a master password or a stored
+    /// key, and this crate has no business handling either.
+    pub fn load_vault_file(&self) -> ConfigResult<Option<VaultFile>> {
+        let path = self.paths.vault();
+        if !store::exists(&path) {
+            return Ok(None);
+        }
+        store::load(&path).map(Some)
+    }
+
+    /// Write the vault.
+    pub fn save_vault_file(&self, vault: &VaultFile) -> ConfigResult<()> {
+        store::save(&self.paths.vault(), vault)
+    }
+
     /// Settings for a session, resolved through its folders over the application defaults.
     ///
     /// The one place the two halves of the settings system meet: application preferences are the
@@ -159,6 +187,25 @@ mod tests {
         assert!(!store.paths().settings().exists());
         assert!(!store.paths().sessions().exists());
         assert!(!store.paths().layout().exists());
+        assert!(!store.has_vault());
+        assert!(store.load_vault_file().expect("vault").is_none());
+    }
+
+    #[test]
+    fn a_vault_is_reported_once_it_exists() {
+        use bestterm_core_vault::{Secret, Vault};
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = store_in(&dir);
+        assert!(!store.has_vault());
+
+        let master = Secret::new("correct horse battery staple");
+        let vault = Vault::create(&master).expect("creates");
+        store.save_vault_file(&vault.to_file()).expect("saves");
+
+        assert!(store.has_vault());
+        let file = store.load_vault_file().expect("loads").expect("present");
+        assert!(Vault::unlock(file, &master).is_ok());
     }
 
     #[test]

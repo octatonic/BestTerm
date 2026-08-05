@@ -114,6 +114,31 @@ colours, the 256-colour cube, dim/bold/inverse handling — happens in `core-ter
 terminal *semantics*. `term-render` only ever sees resolved RGB, which makes it testable without a
 VT parser.
 
+## The vault uses two keys, not one
+
+```
+master password ──Argon2id(salt)──► KEK ──seals──► DEK ──seals──► every entry
+                                     │              │
+                         stored: salt + costs   stored: wrapped blob
+```
+
+The data-encryption key is random and never leaves the vault. The key-encryption key is derived from
+the master password and does nothing but unwrap it. Three properties follow, none of which work with
+a single derived key:
+
+* Changing the master password rewraps one blob instead of re-encrypting every secret, so the file's
+  diff is two lines.
+* The OS keystore can hold the DEK for a password-free unlock without ever holding the password.
+* Argon2 costs live in the file, so raising them later does not lock anyone out of an existing vault.
+
+Every entry is authenticated against **its own name**. Without that, someone with write access to
+the file could move the ciphertext of `staging/password` onto `production/password` and every
+integrity check would still pass.
+
+The session tree references credentials by opaque handle and holds none of them. That separation is
+what lets `sessions.toml` be a readable, git-synchronisable file — and it is the specific thing
+MobaXterm's `.mxtsessions` format gets wrong, storing SFTP passwords in clear text.
+
 ## X11 is orchestrated, never implemented
 
 ```

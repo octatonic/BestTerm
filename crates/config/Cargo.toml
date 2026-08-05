@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 bestterm-core-model.workspace = true
+bestterm-core-vault.workspace = true
 directories.workspace = true
 serde.workspace = true
 thiserror.workspace = true

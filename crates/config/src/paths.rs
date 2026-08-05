@@ -24,6 +24,13 @@ pub const SETTINGS_FILE: &str = "settings.toml";
 /// Filename of the saved window layout.
 pub const LAYOUT_FILE: &str = "layout.toml";
 
+/// Filename of the credential vault.
+///
+/// Sits in the config directory with the session tree, not in state: the vault is encrypted, so it is
+/// meant to travel with the sessions it belongs to. Everything in it is useless without the master
+/// password.
+pub const VAULT_FILE: &str = "vault.toml";
+
 /// Resolved locations for this installation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Paths {
@@ -82,6 +89,11 @@ impl Paths {
     /// Path of the saved layout.
     pub fn layout(&self) -> PathBuf {
         self.state_dir.join(LAYOUT_FILE)
+    }
+
+    /// Path of the credential vault.
+    pub fn vault(&self) -> PathBuf {
+        self.config_dir.join(VAULT_FILE)
     }
 }
 

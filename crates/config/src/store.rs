@@ -114,7 +114,10 @@ pub struct Migration {
 }
 
 /// A document persisted as versioned TOML.
-pub trait Document: Serialize + DeserializeOwned + Default {
+///
+/// `Default` is required only by [`load_or_default`], not by the trait: a vault file has no
+/// meaningful empty value, and demanding one would mean inventing a vault that cannot be opened.
+pub trait Document: Serialize + DeserializeOwned {
     /// Schema version this build writes.
     const VERSION: u32;
 
@@ -197,12 +200,20 @@ pub fn load<T: Document>(path: &Path) -> ConfigResult<T> {
         })
 }
 
+/// Whether a document's file is absent.
+///
+/// Distinguishes "there is no vault yet" from "the vault will not load", which are different
+/// conversations to have with a user.
+pub fn exists(path: &Path) -> bool {
+    path.is_file()
+}
+
 /// Load a document, or its default when the file does not exist.
 ///
 /// A missing file is the first-run case, not an error. Anything else — unreadable, malformed, from
 /// the future — is reported, because silently replacing a file that exists but cannot be understood
 /// would destroy it on the next save.
-pub fn load_or_default<T: Document>(path: &Path) -> ConfigResult<T> {
+pub fn load_or_default<T: Document + Default>(path: &Path) -> ConfigResult<T> {
     match load(path) {
         Ok(value) => Ok(value),
         Err(ConfigError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
