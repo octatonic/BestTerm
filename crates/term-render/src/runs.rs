@@ -98,9 +98,13 @@ pub fn build_text_runs(cells: &[RenderCell]) -> Vec<TextRun> {
         let flags = cell.flags & TEXT_STYLE_MASK;
         let wide = cell.flags.contains(CellFlags::WIDE);
 
-        let continues = current
-            .as_ref()
-            .is_some_and(|run| run.fg == cell.fg && run.flags == flags && col == expected_col);
+        // A wide glyph must both start and end its own run. Testing `wide` only after appending
+        // would let it join the preceding run, and a run's on-screen width is assumed to be one
+        // cell per character — so everything after the glyph would drift one column left.
+        let continues = !wide
+            && current
+                .as_ref()
+                .is_some_and(|run| run.fg == cell.fg && run.flags == flags && col == expected_col);
 
         if !continues {
             if let Some(run) = current.take() {
@@ -224,6 +228,40 @@ mod tests {
             (1, "漢", 2)
         );
         assert_eq!((runs[2].col, runs[2].text.as_str()), (3, "b"));
+    }
+
+    #[test]
+    fn consecutive_wide_glyphs_each_get_their_own_run() {
+        // A line of CJK is the common case, not the exotic one.
+        let mut cells = row("漢字");
+        cells[0].ch = '漢';
+        cells[0].flags |= CellFlags::WIDE;
+        cells[1].ch = ' ';
+        cells[1].flags |= CellFlags::WIDE_SPACER;
+        // `row()` gave two cells; extend to four so both glyphs have a spacer.
+        cells.push(RenderCell {
+            ch: '字',
+            fg: FG,
+            bg: BG,
+            flags: CellFlags::WIDE,
+        });
+        cells.push(RenderCell {
+            ch: ' ',
+            fg: FG,
+            bg: BG,
+            flags: CellFlags::WIDE_SPACER,
+        });
+
+        let runs = build_text_runs(&cells);
+        assert_eq!(runs.len(), 2, "got {runs:?}");
+        assert_eq!(
+            (runs[0].col, runs[0].text.as_str(), runs[0].width),
+            (0, "漢", 2)
+        );
+        assert_eq!(
+            (runs[1].col, runs[1].text.as_str(), runs[1].width),
+            (2, "字", 2)
+        );
     }
 
     #[test]
