@@ -14,7 +14,7 @@ use bestterm_ui_chrome::{
     ChromeAction, ChromeState, ChromeTheme, SidebarPanel, StatusInfo, TabInfo, apply_theme,
     menu_bar, quick_connect_bar, ribbon, sidebar_strip, status_bar, tab_bar,
 };
-use egui::{CornerRadius, EventFilter, Frame, Sense, Stroke};
+use egui::{CentralPanel, CornerRadius, EventFilter, Frame, Panel, Sense, Stroke};
 
 use crate::tab::TerminalTab;
 
@@ -281,70 +281,75 @@ fn handle_input(tab: &mut TerminalTab, events: &[egui::Event], scroll_y: f32, ce
 }
 
 impl eframe::App for BestTermApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+
         if !self.theme_installed {
-            apply_theme(ctx, &self.theme);
+            apply_theme(&ctx, &self.theme);
             self.theme_installed = true;
         }
-        self.metrics = TerminalMetrics::measure(ctx, &self.term_style);
+        self.metrics = TerminalMetrics::measure(&ctx, &self.term_style);
 
         let output_arrived = self.pump();
         self.sync_chrome();
 
         let mut actions: Vec<ChromeAction> = Vec::new();
 
-        egui::TopBottomPanel::top("bestterm_menu_bar")
-            .frame(chrome_frame(self.theme.menu_bg))
-            .show(ctx, |ui| menu_bar(ui, &mut actions));
+        // Cloned once per frame so the panel closures below borrow a local rather than `self`,
+        // which would otherwise conflict with the two closures that need `&mut self`. The theme is
+        // a handful of colours and floats; the clarity is worth more than the copy.
+        let theme = self.theme.clone();
 
-        egui::TopBottomPanel::top("bestterm_ribbon")
-            .exact_height(self.theme.ribbon_height)
-            .frame(chrome_frame(self.theme.chrome_bg))
-            .show(ctx, |ui| ribbon(ui, &self.theme, &mut actions));
+        // Panel order is layout order: first added is outermost. The central panel must be last.
+        Panel::top("bestterm_menu_bar")
+            .frame(chrome_frame(theme.menu_bg))
+            .show(ui, |ui| menu_bar(ui, &mut actions));
 
-        egui::TopBottomPanel::top("bestterm_quick_connect")
-            .exact_height(self.theme.quick_connect_height + 6.0)
-            .frame(chrome_frame(self.theme.chrome_bg))
-            .show(ctx, |ui| {
+        Panel::top("bestterm_ribbon")
+            .exact_size(theme.ribbon_height)
+            .frame(chrome_frame(theme.chrome_bg))
+            .show(ui, |ui| ribbon(ui, &theme, &mut actions));
+
+        Panel::top("bestterm_quick_connect")
+            .exact_size(theme.quick_connect_height + 6.0)
+            .frame(chrome_frame(theme.chrome_bg))
+            .show(ui, |ui| {
                 quick_connect_bar(ui, &mut self.chrome, &mut actions)
             });
 
-        egui::TopBottomPanel::bottom("bestterm_status_bar")
-            .exact_height(self.theme.status_bar_height)
-            .frame(chrome_frame(self.theme.chrome_bg))
-            .show(ctx, |ui| status_bar(ui, &self.theme, &self.chrome.status));
+        Panel::bottom("bestterm_status_bar")
+            .exact_size(theme.status_bar_height)
+            .frame(chrome_frame(theme.chrome_bg))
+            .show(ui, |ui| status_bar(ui, &theme, &self.chrome.status));
 
         // The edge strip is always visible, even when the panel beside it is collapsed.
-        egui::SidePanel::left("bestterm_sidebar_strip")
-            .exact_width(self.theme.sidebar_strip_width)
+        Panel::left("bestterm_sidebar_strip")
+            .exact_size(theme.sidebar_strip_width)
             .resizable(false)
-            .frame(Frame::NONE.fill(self.theme.chrome_bg))
-            .show(ctx, |ui| {
-                sidebar_strip(ui, &self.theme, &self.chrome, &mut actions)
+            .frame(Frame::NONE.fill(theme.chrome_bg))
+            .show(ui, |ui| {
+                sidebar_strip(ui, &theme, &self.chrome, &mut actions)
             });
 
         if self.chrome.sidebar_open {
-            egui::SidePanel::left("bestterm_sidebar")
-                .default_width(self.theme.sidebar_width)
-                .min_width(self.theme.sidebar_min_width)
-                .frame(chrome_frame(self.theme.chrome_bg))
-                .show(ctx, |ui| self.sidebar_contents(ui));
+            Panel::left("bestterm_sidebar")
+                .default_size(theme.sidebar_width)
+                .min_size(theme.sidebar_min_width)
+                .frame(chrome_frame(theme.chrome_bg))
+                .show(ui, |ui| self.sidebar_contents(ui));
         }
 
-        egui::CentralPanel::default()
-            .frame(Frame::NONE)
-            .show(ctx, |ui| {
-                egui::TopBottomPanel::top("bestterm_tab_bar")
-                    .exact_height(self.theme.tab_bar_height)
-                    .frame(chrome_frame(self.theme.chrome_bg))
-                    .show_inside(ui, |ui| {
-                        tab_bar(ui, &self.theme, &self.chrome, &mut actions)
-                    });
+        CentralPanel::no_frame().show(ui, |ui| {
+            let chrome = self.chrome.clone();
+            Panel::top("bestterm_tab_bar")
+                .exact_size(theme.tab_bar_height)
+                .frame(chrome_frame(theme.chrome_bg))
+                .show(ui, |ui| tab_bar(ui, &theme, &chrome, &mut actions));
 
-                self.terminal_ui(ui);
-            });
+            self.terminal_ui(ui);
+        });
 
-        self.apply_actions(actions, ctx);
+        self.apply_actions(actions, &ctx);
 
         // Repaint on new output. Otherwise egui idles, which is exactly what we want: an idle
         // terminal must not burn a core redrawing an unchanged screen.

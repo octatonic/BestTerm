@@ -169,7 +169,7 @@ pub fn apply(ctx: &egui::Context, theme: &ChromeTheme) {
     style.spacing.interact_size = vec2(20.0, 18.0);
     style.spacing.indent = 14.0;
 
-    for (_, font) in style.text_styles.iter_mut() {
+    for font in style.text_styles.values_mut() {
         font.size = theme.font_size;
     }
 
@@ -242,7 +242,7 @@ mod tests {
         let ctx = egui::Context::default();
         let theme = ChromeTheme::light();
         apply(&ctx, &theme);
-        for (_, font) in ctx.style_of(egui::Theme::Light).text_styles.iter() {
+        for font in ctx.style_of(egui::Theme::Light).text_styles.values() {
             assert_eq!(font.size, theme.font_size);
         }
     }
