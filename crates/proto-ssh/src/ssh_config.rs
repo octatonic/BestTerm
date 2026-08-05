@@ -320,10 +320,9 @@ fn split_line(raw: &str) -> Option<(String, String)> {
         return None;
     }
 
-    let (keyword, rest) = match line.find(['\t', ' ', '=']) {
-        Some(index) => (&line[..index], line[index + 1..].trim_start()),
-        None => return None,
-    };
+    // A line with no separator has no value, and a keyword without a value means nothing.
+    let index = line.find(['\t', ' ', '='])?;
+    let (keyword, rest) = (&line[..index], line[index + 1..].trim_start());
 
     // `Keyword = value` — drop a separator that survived the split.
     let rest = rest.trim_start_matches('=').trim();
