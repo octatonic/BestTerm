@@ -5,7 +5,6 @@
 //! decision is recorded in `docs/ROADMAP.md` under permanent non-goals; this module is its
 //! implementation.
 
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// Family a shell belongs to. Drives the icon and a few behavioural defaults.
@@ -51,12 +50,19 @@ impl ShellKind {
     ///
     /// Public because the Windows discovery path constructs kinds explicitly while the Unix path
     /// infers them, and a user-configured custom shell needs the same inference.
+    ///
+    /// Both path separators are understood on every platform, deliberately. `Path::file_stem` only
+    /// knows the host's separator, so on Linux it treats `C:\...\pwsh.exe` as one long filename and
+    /// the family comes back as [`ShellKind::Other`]. That is not a hypothetical: importing a
+    /// `.mxtsessions` file on Linux means parsing Windows paths.
     pub fn from_program(program: &str) -> Self {
-        let stem = Path::new(program)
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .unwrap_or(program)
-            .to_ascii_lowercase();
+        let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+        // Strip a trailing extension, but not a leading dot: `.bashrc` is a name, not an extension.
+        let stem = match name.rsplit_once('.') {
+            Some((before, _)) if !before.is_empty() => before,
+            _ => name,
+        };
+        let stem = stem.to_ascii_lowercase();
         match stem.as_str() {
             "cmd" => Self::Cmd,
             "powershell" => Self::PowerShell,
@@ -283,7 +289,7 @@ fn platform_discover() -> Vec<ShellProfile> {
         let label = label.unwrap_or_else(|| {
             Path::new(&program)
                 .file_name()
-                .and_then(OsStr::to_str)
+                .and_then(|name| name.to_str())
                 .unwrap_or(&program)
                 .to_string()
         });
@@ -301,7 +307,7 @@ fn platform_discover() -> Vec<ShellProfile> {
             let kind = ShellKind::from_program(&shell);
             let name = Path::new(&shell)
                 .file_name()
-                .and_then(OsStr::to_str)
+                .and_then(|name| name.to_str())
                 .unwrap_or("shell")
                 .to_string();
             push(shell, kind, Some(format!("{name} (default)")));
@@ -403,15 +409,38 @@ mod tests {
         assert!(parse_wsl_list(&utf16le("\r\n\r\n")).is_empty());
     }
 
+    /// Both separators must work on every platform: the `.mxtsessions` importer parses Windows
+    /// paths while running on Linux, and `Path::file_stem` only understands the host separator.
     #[test]
-    fn shell_kind_from_program_handles_windows_paths() {
+    fn shell_kind_reads_windows_paths_on_any_platform() {
         assert_eq!(
             ShellKind::from_program(r"C:\Program Files\PowerShell\7\pwsh.exe"),
             ShellKind::PowerShellCore
         );
+        assert_eq!(
+            ShellKind::from_program(r"C:\Windows\System32\cmd.exe"),
+            ShellKind::Cmd
+        );
+        // Windows accepts forward slashes too, and so must we.
+        assert_eq!(
+            ShellKind::from_program("C:/Program Files/Git/bin/bash.exe"),
+            ShellKind::Bash
+        );
+    }
+
+    #[test]
+    fn shell_kind_reads_unix_paths() {
         assert_eq!(ShellKind::from_program("/bin/zsh"), ShellKind::Zsh);
         assert_eq!(ShellKind::from_program("/bin/dash"), ShellKind::Sh);
         assert_eq!(ShellKind::from_program("/opt/nu"), ShellKind::Other);
+        assert_eq!(ShellKind::from_program("bash"), ShellKind::Bash);
+    }
+
+    #[test]
+    fn a_leading_dot_is_a_name_not_an_extension() {
+        // Stripping ".bashrc" down to "" would classify it by an empty stem.
+        assert_eq!(ShellKind::from_program(".bashrc"), ShellKind::Other);
+        assert_eq!(ShellKind::from_program("/home/u/.bashrc"), ShellKind::Other);
     }
 
     #[test]
