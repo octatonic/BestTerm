@@ -1,9 +1,12 @@
 //! SSH.
 //!
-//! Being built in the order the pieces can be verified rather than the order they run in. What is
-//! here now is [`known_hosts`], the part that decides whether the server on the other end is the one
-//! we spoke to last time — pure logic, exhaustively testable, and the piece where a mistake is a
-//! security bug rather than an inconvenience.
+//! Being built in the order the pieces can be verified rather than the order they run in.
+//!
+//! * [`known_hosts`] decides whether the server on the other end is the one we spoke to last time.
+//!   Pure logic, exhaustively testable, and the piece where a mistake is a security bug rather than
+//!   an inconvenience.
+//! * [`ssh_config`] reads `~/.ssh/config`, so BestTerm inherits a setup someone already has instead
+//!   of asking them to enter it all again.
 //!
 //! The `russh` transport, authentication and channel multiplexing follow.
 //!
@@ -24,5 +27,7 @@
 //! ```
 
 pub mod known_hosts;
+pub mod ssh_config;
 
 pub use known_hosts::{HostKey, HostsError, KnownHosts, Marker, Verdict};
+pub use ssh_config::{JumpHop, Query, QueryContext, SshConfig};
