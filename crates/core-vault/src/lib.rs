@@ -368,7 +368,10 @@ mod tests {
     #[test]
     fn a_secret_comes_back_out() {
         let vault = vault_with_entries();
-        let secret = vault.get("prod/db/password").expect("gets").expect("exists");
+        let secret = vault
+            .get("prod/db/password")
+            .expect("gets")
+            .expect("exists");
         assert_eq!(secret.expose(), "hunter2");
     }
 
@@ -386,7 +389,10 @@ mod tests {
             .set("prod/db/password", &Secret::new("rotated"))
             .expect("sets");
         assert_eq!(vault.len(), 2);
-        let secret = vault.get("prod/db/password").expect("gets").expect("exists");
+        let secret = vault
+            .get("prod/db/password")
+            .expect("gets")
+            .expect("exists");
         assert_eq!(secret.expose(), "rotated");
     }
 
@@ -401,7 +407,10 @@ mod tests {
     #[test]
     fn names_are_sorted_so_the_file_diffs_cleanly() {
         let vault = vault_with_entries();
-        assert_eq!(vault.names(), vec!["prod/db/password", "staging/db/password"]);
+        assert_eq!(
+            vault.names(),
+            vec!["prod/db/password", "staging/db/password"]
+        );
     }
 
     #[test]
@@ -426,8 +435,14 @@ mod tests {
         assert_eq!(reopened.names(), original.names());
         for name in reopened.names() {
             assert_eq!(
-                reopened.get(name).expect("gets").map(|s| s.expose().to_string()),
-                original.get(name).expect("gets").map(|s| s.expose().to_string()),
+                reopened
+                    .get(name)
+                    .expect("gets")
+                    .map(|s| s.expose().to_string()),
+                original
+                    .get(name)
+                    .expect("gets")
+                    .map(|s| s.expose().to_string()),
             );
         }
     }
@@ -471,7 +486,10 @@ mod tests {
         vault.change_master_password(&new_master).expect("changes");
         let after = vault.to_file();
 
-        assert_eq!(after.entries, before.entries, "entries must not be rewritten");
+        assert_eq!(
+            after.entries, before.entries,
+            "entries must not be rewritten"
+        );
         assert_ne!(after.wrapped_key, before.wrapped_key);
         assert_ne!(after.kdf.salt, before.kdf.salt, "a new salt each time");
 

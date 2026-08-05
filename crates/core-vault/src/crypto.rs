@@ -123,7 +123,13 @@ pub(crate) fn seal(key: &DataKey, aad: &[u8], plaintext: &[u8]) -> VaultResult<S
     let nonce = XNonce::from(nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(&nonce, Payload { msg: plaintext, aad })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| VaultError::Encryption)?;
 
     Ok(SealedBlob {
