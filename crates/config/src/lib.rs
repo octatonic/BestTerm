@@ -143,7 +143,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = store_in(&dir);
 
-        assert_eq!(store.load_settings().expect("settings"), AppSettings::default());
+        assert_eq!(
+            store.load_settings().expect("settings"),
+            AppSettings::default()
+        );
         assert!(store.load_tree().expect("tree").is_empty());
         assert!(
             store

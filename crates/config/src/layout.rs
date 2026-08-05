@@ -137,7 +137,10 @@ impl PaneNode {
                 ratio,
                 first,
                 second,
-            } => match (first.retain_sessions(exists), second.retain_sessions(exists)) {
+            } => match (
+                first.retain_sessions(exists),
+                second.retain_sessions(exists),
+            ) {
                 (Some(first), Some(second)) => Some(Self::Split {
                     axis: *axis,
                     ratio: *ratio,
@@ -286,10 +289,7 @@ mod tests {
         let path = dir.path().join("layout.toml");
         let original = LayoutDoc::default();
         store::save(&path, &original).expect("saves");
-        assert_eq!(
-            store::load::<LayoutDoc>(&path).expect("loads"),
-            original
-        );
+        assert_eq!(store::load::<LayoutDoc>(&path).expect("loads"), original);
     }
 
     #[test]
@@ -370,7 +370,11 @@ mod tests {
     fn clamping_reaches_nested_splits() {
         let mut root = split(
             PaneNode::local_shell(None),
-            split(PaneNode::local_shell(None), PaneNode::local_shell(None), 5.0),
+            split(
+                PaneNode::local_shell(None),
+                PaneNode::local_shell(None),
+                5.0,
+            ),
             0.5,
         );
         root.clamp_ratios();

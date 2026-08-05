@@ -219,7 +219,10 @@ pub fn save<T: Document>(path: &Path, value: &T) -> ConfigResult<()> {
         name: T::NAME,
         source,
     })?;
-    table.insert(VERSION_KEY.to_string(), Value::Integer(i64::from(T::VERSION)));
+    table.insert(
+        VERSION_KEY.to_string(),
+        Value::Integer(i64::from(T::VERSION)),
+    );
 
     let text = toml::to_string_pretty(&table).map_err(|source| ConfigError::Serialize {
         name: T::NAME,

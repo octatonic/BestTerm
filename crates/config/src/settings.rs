@@ -169,11 +169,7 @@ mod tests {
         // Hand-written config files are always partial; every missing key must have an answer.
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("settings.toml");
-        std::fs::write(
-            &path,
-            "version = 1\n[terminal]\nfont_size = 18.0\n",
-        )
-        .expect("writes");
+        std::fs::write(&path, "version = 1\n[terminal]\nfont_size = 18.0\n").expect("writes");
 
         let loaded: AppSettings = store::load(&path).expect("loads");
         assert_eq!(loaded.terminal.font_size, 18.0);
