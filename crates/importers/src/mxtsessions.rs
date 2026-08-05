@@ -263,7 +263,7 @@ fn split_folder_path(value: &str) -> Vec<String> {
         .split('\\')
         .map(str::trim)
         .filter(|part| !part.is_empty())
-        .map(|part| unescape(part))
+        .map(unescape)
         .collect()
 }
 

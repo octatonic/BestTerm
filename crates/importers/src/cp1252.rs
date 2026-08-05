@@ -51,7 +51,7 @@ const HIGH_CONTROLS: [char; 32] = [
 /// Decode CP1252 bytes.
 ///
 /// Cannot fail: every one of the 256 byte values has a defined result.
-pub fn decode(bytes: &[u8]) -> String {
+pub(crate) fn decode(bytes: &[u8]) -> String {
     bytes
         .iter()
         .map(|&byte| match byte {
