@@ -18,7 +18,8 @@
 //! * *Revoked* is an explicit `@revoked` marker. Never connect, never offer to accept.
 
 use base64::prelude::{BASE64_STANDARD, Engine as _};
-use hmac::{Hmac, Mac};
+// `KeyInit` supplies `new_from_slice`, `Mac` supplies `update` and `finalize`; both are needed.
+use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256};
 
