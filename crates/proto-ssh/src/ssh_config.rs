@@ -205,10 +205,7 @@ impl SshConfig {
     /// order — the order the manual specifies. Passing the resolution in rather than reading files
     /// here keeps the parser testable without a filesystem, and keeps the decision about which
     /// directory a relative include is relative to with the caller that knows.
-    pub fn parse_with_includes(
-        text: &str,
-        resolve: &mut dyn FnMut(&str) -> Vec<String>,
-    ) -> Self {
+    pub fn parse_with_includes(text: &str, resolve: &mut dyn FnMut(&str) -> Vec<String>) -> Self {
         let mut blocks = Vec::new();
         parse_into(text, &mut blocks, resolve, 0);
         Self { blocks }
@@ -618,7 +615,9 @@ Host srv
     #[test]
     fn proxy_jump_is_split_into_hops_nearest_first() {
         let text = "Host target\n    ProxyJump bastion1,user@bastion2:2222\n";
-        let hops = SshConfig::parse(text).query(&context("target")).proxy_jump();
+        let hops = SshConfig::parse(text)
+            .query(&context("target"))
+            .proxy_jump();
         assert_eq!(
             hops,
             vec![
