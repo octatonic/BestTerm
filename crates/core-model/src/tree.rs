@@ -35,7 +35,7 @@ pub enum ModelError {
 }
 
 /// Result alias for tree edits.
-pub type Result<T> = std::result::Result<T, ModelError>;
+pub type ModelResult<T> = std::result::Result<T, ModelError>;
 
 /// What a node is.
 #[derive(Clone, Debug, PartialEq)]
@@ -178,7 +178,7 @@ impl SessionTree {
         &mut self,
         parent: Option<NodeId>,
         name: impl Into<String>,
-    ) -> Result<NodeId> {
+    ) -> ModelResult<NodeId> {
         self.insert(parent, name.into(), NodeKind::Folder { expanded: true })
     }
 
@@ -188,14 +188,19 @@ impl SessionTree {
         parent: Option<NodeId>,
         name: impl Into<String>,
         config: ProtocolConfig,
-    ) -> Result<NodeId> {
+    ) -> ModelResult<NodeId> {
         let kind = NodeKind::Session {
             config: Box::new(config),
         };
         self.insert(parent, name.into(), kind)
     }
 
-    fn insert(&mut self, parent: Option<NodeId>, name: String, kind: NodeKind) -> Result<NodeId> {
+    fn insert(
+        &mut self,
+        parent: Option<NodeId>,
+        name: String,
+        kind: NodeKind,
+    ) -> ModelResult<NodeId> {
         if let Some(parent_id) = parent {
             self.require_folder(parent_id)?;
         }
@@ -232,7 +237,7 @@ impl SessionTree {
     ///
     /// Returns the ids removed, deepest last, so a caller can clean up anything that referenced
     /// them — open tabs, tunnels, jump-host chains.
-    pub fn remove(&mut self, id: NodeId) -> Result<Vec<NodeId>> {
+    pub fn remove(&mut self, id: NodeId) -> ModelResult<Vec<NodeId>> {
         if !self.contains(id) {
             return Err(ModelError::UnknownNode(id));
         }
@@ -265,7 +270,7 @@ impl SessionTree {
         id: NodeId,
         new_parent: Option<NodeId>,
         index: Option<usize>,
-    ) -> Result<()> {
+    ) -> ModelResult<()> {
         if !self.contains(id) {
             return Err(ModelError::UnknownNode(id));
         }
@@ -311,7 +316,7 @@ impl SessionTree {
     }
 
     /// Rename a node.
-    pub fn rename(&mut self, id: NodeId, name: impl Into<String>) -> Result<()> {
+    pub fn rename(&mut self, id: NodeId, name: impl Into<String>) -> ModelResult<()> {
         match self.nodes.get_mut(&id) {
             Some(node) => {
                 node.name = name.into();
@@ -388,11 +393,19 @@ impl SessionTree {
         self.path(id).join(" / ")
     }
 
-    /// Settings for a node, with folder inheritance applied.
+    /// Settings for a node, with folder inheritance applied over the built-in defaults.
+    pub fn resolve_settings(&self, id: NodeId) -> ResolvedSettings {
+        self.resolve_settings_from(ResolvedSettings::default(), id)
+    }
+
+    /// Settings for a node, with folder inheritance applied over `base`.
+    ///
+    /// `base` is the outermost link in the chain, which is how application-wide preferences become the
+    /// root of session inheritance — including for sessions that sit in no folder at all.
     ///
     /// Ancestors are applied outermost first, so the closest one wins.
-    pub fn resolve_settings(&self, id: NodeId) -> ResolvedSettings {
-        let mut resolved = ResolvedSettings::default();
+    pub fn resolve_settings_from(&self, base: ResolvedSettings, id: NodeId) -> ResolvedSettings {
+        let mut resolved = base;
         for ancestor in self.ancestors(id) {
             if let Some(node) = self.nodes.get(&ancestor) {
                 node.settings.apply_to(&mut resolved);
@@ -474,7 +487,7 @@ impl SessionTree {
         }
     }
 
-    fn require_folder(&self, id: NodeId) -> Result<()> {
+    fn require_folder(&self, id: NodeId) -> ModelResult<()> {
         match self.nodes.get(&id) {
             None => Err(ModelError::UnknownNode(id)),
             Some(node) if !node.is_folder() => Err(ModelError::NotAFolder(id)),
@@ -703,6 +716,31 @@ mod tests {
     fn an_unset_node_gets_the_defaults() {
         let (tree, _, _, _, _, local) = sample();
         assert_eq!(tree.resolve_settings(local), ResolvedSettings::default());
+    }
+
+    #[test]
+    fn a_supplied_base_reaches_even_a_node_in_no_folder() {
+        // How application-wide preferences become the outermost link in the chain.
+        let (tree, _, _, _, _, local) = sample();
+        let base = ResolvedSettings {
+            keepalive_secs: 5,
+            ..Default::default()
+        };
+        assert_eq!(tree.resolve_settings_from(base, local).keepalive_secs, 5);
+    }
+
+    #[test]
+    fn a_folder_still_beats_the_supplied_base() {
+        let (mut tree, prod, _, mongo, _, _) = sample();
+        tree.get_mut(prod).expect("node").settings = SettingsOverride {
+            keepalive_secs: Some(30),
+            ..Default::default()
+        };
+        let base = ResolvedSettings {
+            keepalive_secs: 5,
+            ..Default::default()
+        };
+        assert_eq!(tree.resolve_settings_from(base, mongo).keepalive_secs, 30);
     }
 
     #[test]

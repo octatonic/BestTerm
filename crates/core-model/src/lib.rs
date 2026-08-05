@@ -54,4 +54,4 @@ pub use protocol::{
     ProtocolConfig, RdpConfig, SerialConfig, SshAuth, SshConfig, TelnetConfig, VncConfig,
 };
 pub use settings::{ResolvedSettings, SettingsOverride};
-pub use tree::{ModelError, Node, NodeKind, SessionTree};
+pub use tree::{ModelError, ModelResult, Node, NodeKind, SessionTree};

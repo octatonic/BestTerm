@@ -16,6 +16,7 @@ authors = ["BestTerm contributors"]
 bestterm-transport = { path = "crates/transport", version = "0.1.0" }
 bestterm-surface = { path = "crates/surface", version = "0.1.0" }
 bestterm-core-model = { path = "crates/core-model", version = "0.1.0" }
+bestterm-config = { path = "crates/config", version = "0.1.0" }
 bestterm-core-pty = { path = "crates/core-pty", version = "0.1.0" }
 bestterm-core-terminal = { path = "crates/core-terminal", version = "0.1.0" }
 bestterm-term-render = { path = "crates/term-render", version = "0.1.0" }
@@ -54,6 +55,9 @@ directories = "6.0"
 # Node identity must survive a rename and a git merge, which rules out both
 # path-derived and sequentially-allocated ids. See crates/core-model/src/id.rs.
 uuid = { version = "1.24", features = ["v4", "serde"] }
+
+# Test-only. Configuration tests must never touch a developer's real files.
+tempfile = "3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
