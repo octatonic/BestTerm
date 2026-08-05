@@ -90,11 +90,7 @@ impl Import {
         self.tree
             .walk()
             .into_iter()
-            .filter(|id| {
-                self.tree
-                    .get(*id)
-                    .is_some_and(|node| !node.is_folder())
-            })
+            .filter(|id| self.tree.get(*id).is_some_and(|node| !node.is_folder()))
             .count()
     }
 }
@@ -353,14 +349,12 @@ fn parse_session(name: &str, value: &str) -> Result<ParsedSession, SkipReason> {
         .filter(|text| !text.is_empty());
 
     let plaintext_secret = if type_id == TYPE_SFTP {
-        field(&fields, 14)
-            .filter(|raw| !raw.is_empty())
-            .map(|raw| {
-                (
-                    format!("proxy password for `{name}`"),
-                    Secret::new(unescape(raw)),
-                )
-            })
+        field(&fields, 14).filter(|raw| !raw.is_empty()).map(|raw| {
+            (
+                format!("proxy password for `{name}`"),
+                Secret::new(unescape(raw)),
+            )
+        })
     } else {
         None
     };
@@ -536,7 +530,10 @@ mod tests {
             .into_iter()
             .map(|id| import.tree.path_string(id))
             .collect();
-        assert!(paths.contains(&"Production / web".to_string()), "got {paths:?}");
+        assert!(
+            paths.contains(&"Production / web".to_string()),
+            "got {paths:?}"
+        );
         assert!(
             paths.contains(&"Production / db / mongo".to_string()),
             "got {paths:?}"
@@ -604,7 +601,12 @@ mod tests {
         // inherits, and the file's "off" is MobaXterm's default rather than an opinion.
         let mongo = node_named(&import, "mongo");
         assert_eq!(
-            import.tree.get(mongo).expect("node").settings.x11_forwarding,
+            import
+                .tree
+                .get(mongo)
+                .expect("node")
+                .settings
+                .x11_forwarding,
             None
         );
     }
@@ -739,16 +741,16 @@ mod tests {
         assert_eq!(unescape("a__PIPE__b"), "a|b");
         assert_eq!(unescape("c__DIEZE__1"), "c#1");
         assert_eq!(unescape("50__PERCENT__"), "50%");
-        assert_eq!(
-            unescape("_CurrentDrive_\\keys\\id_rsa"),
-            "C:\\keys\\id_rsa"
-        );
+        assert_eq!(unescape("_CurrentDrive_\\keys\\id_rsa"), "C:\\keys\\id_rsa");
     }
 
     #[test]
     fn a_pipe_list_is_split_before_it_is_unescaped() {
         // Unescaping first would turn `a__PIPE__b` into `a|b` and lose the boundary.
-        assert_eq!(split_pipe_list("host1__PIPE__host2"), vec!["host1", "host2"]);
+        assert_eq!(
+            split_pipe_list("host1__PIPE__host2"),
+            vec!["host1", "host2"]
+        );
         assert_eq!(split_pipe_list(""), Vec::<String>::new());
         assert_eq!(
             split_pipe_list("only"),
@@ -841,12 +843,7 @@ mod tests {
             .tree
             .walk()
             .into_iter()
-            .find(|id| {
-                import
-                    .tree
-                    .get(*id)
-                    .is_some_and(|node| node.name == name)
-            })
+            .find(|id| import.tree.get(*id).is_some_and(|node| node.name == name))
             .unwrap_or_else(|| panic!("no node named {name}"))
     }
 
