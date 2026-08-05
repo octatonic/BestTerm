@@ -138,15 +138,24 @@ pub enum ChromeAction {
 /// Items are placeholders pending the enumeration described in `docs/ui-parity.md`; the *titles* and
 /// their order are already correct and are what the layout is judged on.
 const MENUS: &[(&str, &[&str])] = &[
-    ("Terminal", &["New local shell", "Clear buffer", "Log session"]),
+    (
+        "Terminal",
+        &["New local shell", "Clear buffer", "Log session"],
+    ),
     ("Sessions", &["New session…", "Save session", "Import…"]),
-    ("View", &["Toggle sidebar", "Toggle status bar", "Full screen"]),
+    (
+        "View",
+        &["Toggle sidebar", "Toggle status bar", "Full screen"],
+    ),
     ("Split", &["Two panes", "Three panes", "Four panes"]),
     ("MultiExec", &["Start MultiExec", "Stop MultiExec"]),
     ("Tunneling", &["Tunnel manager…", "New tunnel…"]),
     ("Packages", &["Package manager…"]),
     ("Settings", &["Preferences…", "Keyboard shortcuts…"]),
-    ("Macros", &["Record macro", "Stop recording", "Manage macros…"]),
+    (
+        "Macros",
+        &["Record macro", "Stop recording", "Manage macros…"],
+    ),
     ("Help", &["Documentation", "About BestTerm"]),
 ];
 
@@ -273,8 +282,7 @@ pub fn quick_connect_bar(ui: &mut Ui, state: &mut ChromeState, actions: &mut Vec
                 .hint_text("user@host:port")
                 .desired_width(240.0),
         );
-        let submitted =
-            field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let submitted = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if (submitted || ui.button("Go").clicked()) && !state.quick_connect.trim().is_empty() {
             actions.push(ChromeAction::QuickConnect(
                 state.quick_connect.trim().to_string(),
@@ -287,7 +295,12 @@ pub fn quick_connect_bar(ui: &mut Ui, state: &mut ChromeState, actions: &mut Vec
 ///
 /// The rotated labels are the layout's signature element, and the strip stays visible when the panel
 /// is collapsed — clicking the selected tab collapses, clicking another switches and expands.
-pub fn sidebar_strip(ui: &mut Ui, theme: &ChromeTheme, state: &ChromeState, actions: &mut Vec<ChromeAction>) {
+pub fn sidebar_strip(
+    ui: &mut Ui,
+    theme: &ChromeTheme,
+    state: &ChromeState,
+    actions: &mut Vec<ChromeAction>,
+) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
         for panel in SidebarPanel::ALL {
@@ -348,7 +361,12 @@ fn vertical_tab(ui: &mut Ui, theme: &ChromeTheme, label: &str, selected: bool) -
 }
 
 /// The tab bar, plus the `+` button that opens a new local shell.
-pub fn tab_bar(ui: &mut Ui, theme: &ChromeTheme, state: &ChromeState, actions: &mut Vec<ChromeAction>) {
+pub fn tab_bar(
+    ui: &mut Ui,
+    theme: &ChromeTheme,
+    state: &ChromeState,
+    actions: &mut Vec<ChromeAction>,
+) {
     egui::ScrollArea::horizontal()
         .auto_shrink([false, true])
         .show(ui, |ui| {
@@ -363,11 +381,7 @@ pub fn tab_bar(ui: &mut Ui, theme: &ChromeTheme, state: &ChromeState, actions: &
                         actions.push(ChromeAction::SelectTab(index));
                     }
                 }
-                if ui
-                    .button("+")
-                    .on_hover_text("New local shell")
-                    .clicked()
-                {
+                if ui.button("+").on_hover_text("New local shell").clicked() {
                     actions.push(ChromeAction::NewLocalShell);
                 }
             });
@@ -394,8 +408,7 @@ fn tab_widget(ui: &mut Ui, theme: &ChromeTheme, tab: &TabInfo, active: bool) -> 
                         // Placeholder for the protocol icon; real icons land in phase 1.
                         // Taken by character, not by byte: slicing `&s[..1]` panics on a
                         // multi-byte first character.
-                        let initial: String =
-                            tab.protocol.chars().next().into_iter().collect();
+                        let initial: String = tab.protocol.chars().next().into_iter().collect();
                         ui.label(egui::RichText::new(initial).small());
                         ui.label(&tab.title);
                         if ui.small_button("x").clicked() {

@@ -249,8 +249,12 @@ mod tests {
         let open = PtyTransport::spawn(profile, GridSize::new(80, 24)).expect("spawn");
         let mut transport = open.transport;
 
-        transport.resize(GridSize::new(80, 24)).expect("no-op resize");
-        transport.resize(GridSize::new(100, 30)).expect("real resize");
+        transport
+            .resize(GridSize::new(80, 24))
+            .expect("no-op resize");
+        transport
+            .resize(GridSize::new(100, 30))
+            .expect("real resize");
         assert_eq!(transport.size(), GridSize::new(100, 30));
 
         transport.shutdown().expect("shutdown");

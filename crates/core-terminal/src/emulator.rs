@@ -264,7 +264,11 @@ impl TerminalEmulator for AlacrittyEmulator {
             default_bg,
             cursor: CursorSnapshot {
                 col: content.cursor.point.column.0.min(cols.saturating_sub(1)),
-                row: if cursor_visible { cursor_line as usize } else { 0 },
+                row: if cursor_visible {
+                    cursor_line as usize
+                } else {
+                    0
+                },
                 kind: translate_cursor(content.cursor.shape),
                 visible: cursor_visible,
             },
@@ -369,9 +373,13 @@ fn resolve(palette: &Palette, overrides: &Colors, color: VteColor, dim: bool) ->
             let base = resolve_named(palette, overrides, named);
             // The Dim* slots are already dim; dimming them again would compound.
             let slot = named as usize;
-            let already_dim = (slot::DIM_FIRST..=slot::DIM_LAST).contains(&slot)
-                || slot == slot::DIM_FOREGROUND;
-            if dim && !already_dim { base.dimmed() } else { base }
+            let already_dim =
+                (slot::DIM_FIRST..=slot::DIM_LAST).contains(&slot) || slot == slot::DIM_FOREGROUND;
+            if dim && !already_dim {
+                base.dimmed()
+            } else {
+                base
+            }
         }
     }
 }

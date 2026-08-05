@@ -23,7 +23,8 @@ pub mod runs;
 
 use bestterm_core_terminal::{CellFlags, CursorKind, GridSnapshot, Rgb};
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, pos2, vec2,
+    Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, pos2,
+    vec2,
 };
 
 use crate::runs::{build_bg_runs, build_text_runs};
@@ -106,13 +107,22 @@ impl TerminalMetrics {
     ///
     /// Used for click-to-position and selection; the coordinates are clamped rather than wrapped so
     /// a drag that leaves the widget still selects to the edge.
-    pub fn cell_at(&self, area: Rect, pos: Pos2, cols: usize, rows: usize) -> Option<(usize, usize)> {
+    pub fn cell_at(
+        &self,
+        area: Rect,
+        pos: Pos2,
+        cols: usize,
+        rows: usize,
+    ) -> Option<(usize, usize)> {
         if !area.contains(pos) {
             return None;
         }
         let col = ((pos.x - area.left()) / self.cell_width).floor() as usize;
         let row = ((pos.y - area.top()) / self.cell_height).floor() as usize;
-        Some((col.min(cols.saturating_sub(1)), row.min(rows.saturating_sub(1))))
+        Some((
+            col.min(cols.saturating_sub(1)),
+            row.min(rows.saturating_sub(1)),
+        ))
     }
 }
 
@@ -288,7 +298,10 @@ mod tests {
         let m = metrics();
         let area = Rect::from_min_size(pos2(10.0, 20.0), vec2(640.0, 384.0));
         assert_eq!(m.cell_at(area, pos2(10.0, 20.0), 80, 24), Some((0, 0)));
-        assert_eq!(m.cell_at(area, pos2(10.0 + 8.5, 20.0 + 17.0), 80, 24), Some((1, 1)));
+        assert_eq!(
+            m.cell_at(area, pos2(10.0 + 8.5, 20.0 + 17.0), 80, 24),
+            Some((1, 1))
+        );
         assert_eq!(m.cell_at(area, pos2(0.0, 0.0), 80, 24), None);
     }
 

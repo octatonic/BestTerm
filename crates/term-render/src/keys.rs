@@ -86,7 +86,11 @@ pub fn encode(key: TermKey, mods: KeyMods) -> Option<Vec<u8>> {
         // Backspace sends DEL, not BS — that is xterm's behaviour and what `stty erase` expects.
         // Ctrl+Backspace is the one that sends BS, which shells map to "delete word".
         TermKey::Backspace => {
-            let base = if mods.ctrl { b"\x08".to_vec() } else { b"\x7f".to_vec() };
+            let base = if mods.ctrl {
+                b"\x08".to_vec()
+            } else {
+                b"\x7f".to_vec()
+            };
             with_alt(mods, base)
         }
 

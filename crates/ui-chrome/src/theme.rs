@@ -173,7 +173,11 @@ pub fn apply(ctx: &egui::Context, theme: &ChromeTheme) {
         font.size = theme.font_size;
     }
 
-    ctx.set_style(style);
+    // Pin the look. `egui` keeps a separate style per theme and switches between them with the OS
+    // preference; BestTerm has one chrome to reproduce, so both slots get the same style and the
+    // preference is fixed. Otherwise a user with a dark desktop would get a half-converted theme.
+    ctx.set_theme(egui::ThemePreference::Light);
+    ctx.all_styles_mut(|slot| *slot = style.clone());
 }
 
 #[cfg(test)]
@@ -211,7 +215,7 @@ mod tests {
         let theme = ChromeTheme::light();
         apply(&ctx, &theme);
 
-        let style = ctx.style();
+        let style = ctx.style_of(egui::Theme::Light);
         assert!(!style.visuals.dark_mode);
         assert_eq!(style.visuals.window_corner_radius, CornerRadius::ZERO);
         assert_eq!(
@@ -223,11 +227,22 @@ mod tests {
     }
 
     #[test]
+    fn both_theme_slots_get_the_same_style() {
+        // A user with a dark desktop must still get BestTerm's chrome, not half of it.
+        let ctx = egui::Context::default();
+        apply(&ctx, &ChromeTheme::light());
+        let light = ctx.style_of(egui::Theme::Light);
+        let dark = ctx.style_of(egui::Theme::Dark);
+        assert_eq!(light.visuals.panel_fill, dark.visuals.panel_fill);
+        assert!(!dark.visuals.dark_mode);
+    }
+
+    #[test]
     fn applying_the_theme_sets_every_text_style_to_one_size() {
         let ctx = egui::Context::default();
         let theme = ChromeTheme::light();
         apply(&ctx, &theme);
-        for (_, font) in ctx.style().text_styles.iter() {
+        for (_, font) in ctx.style_of(egui::Theme::Light).text_styles.iter() {
             assert_eq!(font.size, theme.font_size);
         }
     }

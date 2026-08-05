@@ -219,7 +219,10 @@ mod tests {
         let runs = build_text_runs(&cells);
         assert_eq!(runs.len(), 3, "got {runs:?}");
         assert_eq!((runs[0].col, runs[0].text.as_str()), (0, "a"));
-        assert_eq!((runs[1].col, runs[1].text.as_str(), runs[1].width), (1, "漢", 2));
+        assert_eq!(
+            (runs[1].col, runs[1].text.as_str(), runs[1].width),
+            (1, "漢", 2)
+        );
         assert_eq!((runs[2].col, runs[2].text.as_str()), (3, "b"));
     }
 
@@ -246,8 +249,22 @@ mod tests {
         cells[2].bg = BLUE;
         let runs = build_bg_runs(&cells, BG);
         assert_eq!(runs.len(), 2);
-        assert_eq!(runs[0], BgRun { col: 1, len: 1, bg: RED });
-        assert_eq!(runs[1], BgRun { col: 2, len: 1, bg: BLUE });
+        assert_eq!(
+            runs[0],
+            BgRun {
+                col: 1,
+                len: 1,
+                bg: RED
+            }
+        );
+        assert_eq!(
+            runs[1],
+            BgRun {
+                col: 2,
+                len: 1,
+                bg: BLUE
+            }
+        );
     }
 
     #[test]

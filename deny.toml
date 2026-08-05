@@ -33,6 +33,15 @@ allow = [
     "LGPL-3.0-or-later",
     "OpenSSL",
     "BSL-1.0",
+
+    # Font licences, reached through `epaint_default_fonts`, which bundles the
+    # fonts egui falls back to. Both are free/libre and neither restricts the
+    # licensing of the program that displays the font, so both are compatible
+    # with shipping inside a GPLv3 binary. Allowed deliberately rather than by
+    # widening the rules: a *code* dependency arriving under either of these
+    # would be a genuine problem and should be caught.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
 ]
 confidence-threshold = 0.9
 

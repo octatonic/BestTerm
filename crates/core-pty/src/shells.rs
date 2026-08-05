@@ -391,7 +391,10 @@ mod tests {
 
     #[test]
     fn parses_utf8_output_too() {
-        assert_eq!(parse_wsl_list(b"Ubuntu\nDebian\n"), vec!["Ubuntu", "Debian"]);
+        assert_eq!(
+            parse_wsl_list(b"Ubuntu\nDebian\n"),
+            vec!["Ubuntu", "Debian"]
+        );
     }
 
     #[test]

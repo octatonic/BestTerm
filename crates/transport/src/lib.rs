@@ -204,7 +204,10 @@ mod tests {
     #[test]
     fn with_pixels_keeps_clamping() {
         let g = GridSize::with_pixels(0, 5, 640, 480);
-        assert_eq!((g.cols, g.rows, g.pixel_width, g.pixel_height), (1, 5, 640, 480));
+        assert_eq!(
+            (g.cols, g.rows, g.pixel_width, g.pixel_height),
+            (1, 5, 640, 480)
+        );
     }
 
     #[test]
