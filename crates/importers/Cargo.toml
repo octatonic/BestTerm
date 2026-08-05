@@ -1,0 +1,17 @@
+[package]
+name = "bestterm-importers"
+description = "Importers for other clients' session formats, starting with MobaXterm's .mxtsessions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bestterm-core-model.workspace = true
+bestterm-core-vault.workspace = true
+tracing.workspace = true

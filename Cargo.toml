@@ -18,6 +18,7 @@ bestterm-surface = { path = "crates/surface", version = "0.1.0" }
 bestterm-core-model = { path = "crates/core-model", version = "0.1.0" }
 bestterm-config = { path = "crates/config", version = "0.1.0" }
 bestterm-core-vault = { path = "crates/core-vault", version = "0.1.0" }
+bestterm-importers = { path = "crates/importers", version = "0.1.0" }
 bestterm-core-pty = { path = "crates/core-pty", version = "0.1.0" }
 bestterm-core-terminal = { path = "crates/core-terminal", version = "0.1.0" }
 bestterm-term-render = { path = "crates/term-render", version = "0.1.0" }
