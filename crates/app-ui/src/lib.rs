@@ -97,10 +97,6 @@ impl BestTermApp {
         }
     }
 
-    fn active(&mut self) -> Option<&mut TerminalTab> {
-        self.tabs.get_mut(self.chrome.active_tab)
-    }
-
     /// Move output from every transport into its emulator, and answers back the other way.
     ///
     /// Returns true if anything changed and the UI should repaint.
