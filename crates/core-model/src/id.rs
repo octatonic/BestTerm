@@ -15,8 +15,9 @@ use uuid::Uuid;
 ///   ids collide the first time two machines each add a session and the branches meet, and the
 ///   collision is invisible: both nodes claim the same id and one reference silently points at the
 ///   wrong host.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(transparent)]
 pub struct NodeId(Uuid);
 
@@ -98,7 +99,10 @@ mod tests {
             Uuid::parse_str("1b4e28ba-2fa1-11d2-883f-0016d3cca427").expect("valid uuid"),
         );
         let text = toml::to_string(&Holder { id }).expect("serialises");
-        assert_eq!(text.trim(), r#"id = "1b4e28ba-2fa1-11d2-883f-0016d3cca427""#);
+        assert_eq!(
+            text.trim(),
+            r#"id = "1b4e28ba-2fa1-11d2-883f-0016d3cca427""#
+        );
 
         let back: Holder = toml::from_str(&text).expect("deserialises");
         assert_eq!(back.id, id);

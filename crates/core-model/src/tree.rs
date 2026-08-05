@@ -174,7 +174,11 @@ impl SessionTree {
     }
 
     /// Add a folder. `parent` of `None` puts it at the top level.
-    pub fn add_folder(&mut self, parent: Option<NodeId>, name: impl Into<String>) -> Result<NodeId> {
+    pub fn add_folder(
+        &mut self,
+        parent: Option<NodeId>,
+        name: impl Into<String>,
+    ) -> Result<NodeId> {
         self.insert(parent, name.into(), NodeKind::Folder { expanded: true })
     }
 
