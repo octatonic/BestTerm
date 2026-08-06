@@ -31,7 +31,9 @@ use std::time::{Duration, Instant};
 use bestterm_proto_ssh::host_key::{HostKeyDecision, HostKeyVerifier};
 use bestterm_proto_ssh::known_hosts::{HostKey, KnownHosts, Verdict};
 use bestterm_proto_ssh::{Auth, SshConnection, SshError, StrictVerifier, Target};
-use bestterm_transport::{GridSize, Transport as _, TransportEvent};
+// The trait itself is not imported: `open.transport` is a trait object, and methods on one are
+// callable without the trait in scope.
+use bestterm_transport::{GridSize, TransportEvent};
 
 /// How the environment describes the server to talk to.
 struct Server {

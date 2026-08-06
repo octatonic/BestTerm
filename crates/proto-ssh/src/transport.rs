@@ -104,6 +104,18 @@ pub struct SshConnection {
     target: Target,
 }
 
+impl std::fmt::Debug for SshConnection {
+    /// Written by hand: the target is useful in a test failure, and nothing else here should ever
+    /// be printed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConnection")
+            .field("host", &self.target.host)
+            .field("port", &self.target.port)
+            .field("user", &self.target.user)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SshConnection {
     /// Connect, verify the host key, and authenticate.
     pub async fn connect(
