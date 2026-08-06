@@ -63,6 +63,26 @@ pub enum SshError {
         /// Methods the server will accept next.
         remaining: Vec<String>,
     },
+
+    /// A private key could not be read.
+    ///
+    /// Names the file, because the usual causes — wrong path, wrong passphrase, a key in a format
+    /// this build cannot parse — are all things the user fixes by looking at that file.
+    #[error("could not read the private key {path}: {detail}")]
+    PrivateKey {
+        /// The key file.
+        path: std::path::PathBuf,
+        /// What went wrong.
+        detail: String,
+    },
+
+    /// The SSH agent could not be reached or refused.
+    #[error("the ssh agent: {0}")]
+    Agent(String),
+
+    /// The agent is running but holds nothing to offer.
+    #[error("the ssh agent is running but holds no keys")]
+    AgentHasNoKeys,
 }
 
 /// Where to connect.
@@ -74,27 +94,6 @@ pub struct Target {
     pub port: u16,
     /// Login name.
     pub user: String,
-}
-
-/// How to authenticate.
-///
-/// Public keys, the agent and keyboard-interactive follow; this is the first increment.
-#[derive(Clone)]
-pub enum Auth {
-    /// A password.
-    Password(String),
-    /// No credential at all, for servers that permit it.
-    None,
-}
-
-impl std::fmt::Debug for Auth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // A password must not reach a log through a derived Debug.
-        match self {
-            Self::Password(_) => f.write_str("Password(<redacted>)"),
-            Self::None => f.write_str("None"),
-        }
-    }
 }
 
 /// An authenticated SSH connection.
@@ -144,32 +143,7 @@ impl SshConnection {
                 Err(other) => return Err(other),
             };
 
-        let result = match &auth {
-            Auth::Password(password) => {
-                handle
-                    .authenticate_password(target.user.clone(), password.clone())
-                    .await?
-            }
-            Auth::None => handle.authenticate_none(target.user.clone()).await?,
-        };
-
-        match result {
-            russh::client::AuthResult::Success => {}
-            russh::client::AuthResult::Failure {
-                remaining_methods,
-                partial_success,
-            } => {
-                // `MethodKind` has no `Display`, but does convert to `String`.
-                let remaining = remaining_methods.iter().map(String::from).collect();
-                return Err(if partial_success {
-                    // The credential was accepted and the server wants another factor. Reporting
-                    // this as plain failure would send the user to check a password that was right.
-                    SshError::FurtherAuthenticationRequired { remaining }
-                } else {
-                    SshError::AuthenticationFailed { remaining }
-                });
-            }
-        }
+        crate::auth::authenticate(&mut handle, &target.user, &auth).await?;
 
         tracing::info!(host = %target.host, port = target.port, user = %target.user, "ssh connected");
 
@@ -345,7 +319,7 @@ impl Transport for SshTransport {
 }
 
 /// Bridges `russh`'s callbacks to the host key checker.
-struct Handler {
+pub(crate) struct Handler {
     checker: HostKeyChecker,
 }
 

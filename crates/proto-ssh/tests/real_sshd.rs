@@ -28,6 +28,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use bestterm_core_vault::Secret;
 use bestterm_proto_ssh::host_key::{HostKeyDecision, HostKeyVerifier};
 use bestterm_proto_ssh::known_hosts::{HostKey, KnownHosts, Verdict};
 use bestterm_proto_ssh::{Auth, SshConnection, SshError, StrictVerifier, Target};
@@ -140,7 +141,7 @@ async fn a_strict_client_refuses_a_server_it_has_never_met() {
 
     let error = SshConnection::connect(
         server.target(),
-        Auth::Password(server.password.clone()),
+        Auth::Password(Secret::new(server.password.clone())),
         Arc::new(KnownHosts::new()),
         Arc::new(StrictVerifier),
     )
@@ -159,7 +160,7 @@ async fn a_recorded_key_connects_without_a_question() {
 
     let connection = SshConnection::connect(
         server.target(),
-        Auth::Password(server.password.clone()),
+        Auth::Password(Secret::new(server.password.clone())),
         Arc::new(server.known_hosts()),
         Arc::new(StrictVerifier),
     )
@@ -180,7 +181,7 @@ async fn a_server_whose_key_changed_is_reported_as_changed() {
 
     let error = SshConnection::connect(
         server.target(),
-        Auth::Password(server.password.clone()),
+        Auth::Password(Secret::new(server.password.clone())),
         Arc::new(server.known_hosts_with_wrong_key()),
         verifier.clone(),
     )
@@ -204,7 +205,7 @@ async fn accepting_a_new_key_yields_one_that_matches_the_server() {
 
     let connection = SshConnection::connect(
         server.target(),
-        Auth::Password(server.password.clone()),
+        Auth::Password(Secret::new(server.password.clone())),
         Arc::new(KnownHosts::new()),
         verifier.clone(),
     )
@@ -244,7 +245,7 @@ async fn a_wrong_password_is_an_authentication_failure_not_a_host_key_problem() 
 
     let error = SshConnection::connect(
         server.target(),
-        Auth::Password("definitely-not-the-password".to_string()),
+        Auth::Password(Secret::new("definitely-not-the-password")),
         Arc::new(server.known_hosts()),
         Arc::new(StrictVerifier),
     )
@@ -264,7 +265,7 @@ async fn a_shell_runs_a_command_and_closes_cleanly() {
 
     let connection = SshConnection::connect(
         server.target(),
-        Auth::Password(server.password.clone()),
+        Auth::Password(Secret::new(server.password.clone())),
         Arc::new(server.known_hosts()),
         Arc::new(StrictVerifier),
     )
