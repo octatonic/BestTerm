@@ -56,6 +56,61 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # A real sshd, so the SSH client is tested against a server rather than against
+      # our own idea of one. Runs only on Linux; the Windows job still compiles and
+      # runs everything else, and the integration tests skip themselves when the
+      # environment below is absent.
+      - name: Start a test SSH server
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends openssh-server
+          sudo mkdir -p /run/sshd /etc/bestterm-sshd
+
+          # A dedicated account, so nothing depends on how the runner's own is set up.
+          sudo useradd -m -s /bin/bash bestterm-test
+          echo 'bestterm-test:integration-test-password' | sudo chpasswd
+
+          sudo ssh-keygen -q -t ed25519 -N '' -f /etc/bestterm-sshd/host_ed25519
+          sudo chmod a+r /etc/bestterm-sshd/host_ed25519.pub
+
+          # UsePAM no keeps this to /etc/shadow and avoids pulling PAM's configuration
+          # into the test. StrictModes no because the home directory is freshly made.
+          sudo tee /etc/bestterm-sshd/sshd_config >/dev/null <<'CONF'
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey /etc/bestterm-sshd/host_ed25519
+          PidFile /run/sshd/bestterm.pid
+          PasswordAuthentication yes
+          PubkeyAuthentication no
+          KbdInteractiveAuthentication no
+          UsePAM no
+          StrictModes no
+          AllowUsers bestterm-test
+          LogLevel VERBOSE
+          CONF
+
+          sudo /usr/sbin/sshd -f /etc/bestterm-sshd/sshd_config
+          # Fail loudly here rather than leaving every integration test to time out.
+          for _ in $(seq 1 20); do
+            if (echo > /dev/tcp/127.0.0.1/2222) >/dev/null 2>&1; then
+              echo "sshd is listening"; exit 0
+            fi
+            sleep 0.5
+          done
+          echo "sshd did not come up"; sudo cat /var/log/auth.log 2>/dev/null | tail -30; exit 1
+
+      - name: Publish the test server's details
+        if: runner.os == 'Linux'
+        run: |
+          {
+            echo "BESTTERM_SSH_TEST_HOST=127.0.0.1"
+            echo "BESTTERM_SSH_TEST_PORT=2222"
+            echo "BESTTERM_SSH_TEST_USER=bestterm-test"
+            echo "BESTTERM_SSH_TEST_PASSWORD=integration-test-password"
+            echo "BESTTERM_SSH_TEST_HOST_KEY=$(cat /etc/bestterm-sshd/host_ed25519.pub)"
+          } >> "$GITHUB_ENV"
+
       - name: Tests
         run: cargo test --workspace --all-targets
 

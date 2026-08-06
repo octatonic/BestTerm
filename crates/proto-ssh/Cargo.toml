@@ -23,3 +23,9 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# Integration tests link the crate as an external one, so anything they touch has
+# to be listed here as well as above.
+bestterm-transport.workspace = true
+tokio.workspace = true
