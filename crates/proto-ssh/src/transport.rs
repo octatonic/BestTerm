@@ -388,7 +388,10 @@ mod tests {
             remaining: vec!["keyboard-interactive".to_string()],
         }
         .to_string();
-        assert!(message.contains("another authentication factor"), "got {message}");
+        assert!(
+            message.contains("another authentication factor"),
+            "got {message}"
+        );
         assert!(!message.contains("failed"), "got {message}");
     }
 
