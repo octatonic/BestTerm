@@ -210,6 +210,7 @@ mod tests {
         let outcome = checker.outcome().expect("recorded");
         assert_eq!(outcome.verdict, Verdict::Trusted);
         assert_eq!(outcome.decision, HostKeyDecision::Accept);
+        assert!(outcome.decision_allows());
         assert!(!outcome.should_store());
     }
 
@@ -218,10 +219,10 @@ mod tests {
         // The safe direction for anything unattended.
         let checker = checker_with("", Arc::new(StrictVerifier));
         assert!(!checker.check(&key(1)));
-        assert_eq!(
-            checker.outcome().expect("recorded").decision,
-            HostKeyDecision::Reject
-        );
+
+        let outcome = checker.outcome().expect("recorded");
+        assert_eq!(outcome.decision, HostKeyDecision::Reject);
+        assert!(!outcome.decision_allows());
     }
 
     #[test]

@@ -131,17 +131,18 @@ impl SshConnection {
         };
 
         let mut handle =
-            client::connect(config, (target.host.as_str(), target.port), handler).await?;
-
-        // `russh` reports a refused host key as a generic failure, so the distinction is recovered
-        // from what the checker recorded. Telling a user "the server was not accepted" rather than
-        // "connection failed" is the difference between an actionable warning and a shrug.
-        if checker
-            .outcome()
-            .is_some_and(|outcome| !outcome.decision_allows())
-        {
-            return Err(SshError::HostKeyRejected);
-        }
+            match client::connect(config, (target.host.as_str(), target.port), handler).await {
+                Ok(handle) => handle,
+                // `russh` turns a `check_server_key` refusal into exactly this error. Left as-is it
+                // would reach the user as "ssh error: unknown key", which reads like a library
+                // problem rather than "this server is not the one you trusted". The integration
+                // tests caught this: the previous attempt to recover the distinction afterwards
+                // never ran, because `?` had already returned.
+                Err(SshError::Ssh(russh::Error::UnknownKey)) => {
+                    return Err(SshError::HostKeyRejected);
+                }
+                Err(other) => return Err(other),
+            };
 
         let result = match &auth {
             Auth::Password(password) => {
