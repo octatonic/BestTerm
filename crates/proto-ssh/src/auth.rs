@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bestterm_core_vault::Secret;
-use russh::client::{AuthResult, Handle};
+use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{Algorithm, HashAlg, PrivateKeyWithHashAlg, load_secret_key};
 
@@ -37,6 +37,42 @@ pub enum Auth {
     ///
     /// Tried key by key, in the order the agent offers them, which is the order the user arranged.
     Agent,
+    /// Keyboard-interactive: the server asks questions, something answers them.
+    ///
+    /// This is how most one-time-password and 2FA setups present themselves, so the answers cannot
+    /// come from stored configuration — they come from whoever is sitting there, through a
+    /// [`PromptResponder`].
+    KeyboardInteractive(Arc<dyn PromptResponder>),
+}
+
+/// One question from the server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InteractivePrompt {
+    /// The text to show.
+    pub prompt: String,
+    /// Whether what is typed should be visible.
+    ///
+    /// False for a password or a one-time code. Honouring it is the difference between a token
+    /// staying private and appearing on someone's screen during a call.
+    pub echo: bool,
+}
+
+/// Answers the server's questions.
+///
+/// Implemented by the UI to raise a dialog. Returning `None` means the user gave up, which is
+/// reported as [`SshError::AuthenticationCancelled`] rather than as a wrong answer — the two lead to
+/// different next steps.
+pub trait PromptResponder: Send + Sync {
+    /// Answer one round of prompts.
+    ///
+    /// `name` and `instructions` come from the server and may be empty. Exactly one answer per
+    /// prompt must be returned, in order.
+    fn respond(
+        &self,
+        name: &str,
+        instructions: &str,
+        prompts: &[InteractivePrompt],
+    ) -> Option<Vec<Secret>>;
 }
 
 impl std::fmt::Debug for Auth {
@@ -51,6 +87,7 @@ impl std::fmt::Debug for Auth {
                 .field("passphrase", &passphrase.as_ref().map(|_| "<redacted>"))
                 .finish(),
             Self::Agent => f.write_str("Agent"),
+            Self::KeyboardInteractive(_) => f.write_str("KeyboardInteractive"),
         }
     }
 }
@@ -72,6 +109,9 @@ pub(crate) async fn authenticate(
             authenticate_with_key(handle, user, path, passphrase.as_ref()).await?
         }
         Auth::Agent => return authenticate_with_agent(handle, user).await,
+        Auth::KeyboardInteractive(responder) => {
+            return authenticate_interactively(handle, user, responder.as_ref()).await;
+        }
     };
 
     finish(result)
@@ -160,6 +200,77 @@ async fn authenticate_with_agent(
     Err(last.unwrap_or(SshError::AgentHasNoKeys))
 }
 
+/// Answer the server's questions until it is satisfied or refuses.
+///
+/// The loop matters: a server may ask several rounds — password, then a one-time code — and each
+/// round is a fresh set of prompts rather than a repeat of the last.
+async fn authenticate_interactively(
+    handle: &mut Handle<Handler>,
+    user: &str,
+    responder: &dyn PromptResponder,
+) -> Result<(), SshError> {
+    let mut response = handle
+        .authenticate_keyboard_interactive_start(user.to_string(), None)
+        .await?;
+
+    // A misbehaving server could keep asking forever; the user cannot be expected to notice that
+    // they are in a loop, so it is bounded here.
+    for _ in 0..MAX_INTERACTIVE_ROUNDS {
+        match response {
+            KeyboardInteractiveAuthResponse::Success => return Ok(()),
+            KeyboardInteractiveAuthResponse::Failure {
+                remaining_methods,
+                partial_success,
+            } => {
+                let remaining = remaining_methods.iter().map(String::from).collect();
+                return Err(if partial_success {
+                    SshError::FurtherAuthenticationRequired { remaining }
+                } else {
+                    SshError::AuthenticationFailed { remaining }
+                });
+            }
+            KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                let questions: Vec<InteractivePrompt> = prompts
+                    .iter()
+                    .map(|prompt| InteractivePrompt {
+                        prompt: prompt.prompt.clone(),
+                        echo: prompt.echo,
+                    })
+                    .collect();
+
+                let Some(answers) = responder.respond(&name, &instructions, &questions) else {
+                    // Giving up is not a wrong answer, and the two lead somewhere different.
+                    return Err(SshError::AuthenticationCancelled);
+                };
+
+                if answers.len() != questions.len() {
+                    return Err(SshError::InteractiveAnswerCount {
+                        asked: questions.len(),
+                        answered: answers.len(),
+                    });
+                }
+
+                let answers = answers
+                    .iter()
+                    .map(|answer| answer.expose().to_string())
+                    .collect();
+                response = handle
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await?;
+            }
+        }
+    }
+
+    Err(SshError::TooManyInteractiveRounds)
+}
+
+/// How many rounds of questions a server may ask before we assume it is not going to stop.
+const MAX_INTERACTIVE_ROUNDS: usize = 32;
+
 /// RSA signatures must name a hash; everything else ignores it.
 ///
 /// Without this an RSA key is offered as `ssh-rsa` with SHA-1, which modern servers refuse outright —
@@ -241,6 +352,34 @@ mod tests {
         assert!(printed.contains("redacted"), "got {printed}");
         // The path is useful in a log and is not a secret.
         assert!(printed.contains("id_ed25519"), "got {printed}");
+    }
+
+    #[test]
+    fn an_interactive_responder_is_not_described_in_a_log() {
+        struct Never;
+        impl PromptResponder for Never {
+            fn respond(&self, _: &str, _: &str, _: &[InteractivePrompt]) -> Option<Vec<Secret>> {
+                None
+            }
+        }
+        let auth = Auth::KeyboardInteractive(Arc::new(Never));
+        assert_eq!(format!("{auth:?}"), "KeyboardInteractive");
+    }
+
+    #[test]
+    fn a_prompt_carries_whether_the_answer_should_be_visible() {
+        // Ignoring `echo` is how a one-time code ends up on screen during a screen share.
+        let hidden = InteractivePrompt {
+            prompt: "Verification code: ".to_string(),
+            echo: false,
+        };
+        let visible = InteractivePrompt {
+            prompt: "Username: ".to_string(),
+            echo: true,
+        };
+        assert!(!hidden.echo);
+        assert!(visible.echo);
+        assert_ne!(hidden, visible);
     }
 
     #[test]

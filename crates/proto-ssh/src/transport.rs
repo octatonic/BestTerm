@@ -83,6 +83,25 @@ pub enum SshError {
     /// The agent is running but holds nothing to offer.
     #[error("the ssh agent is running but holds no keys")]
     AgentHasNoKeys,
+
+    /// The user abandoned an interactive prompt.
+    ///
+    /// Not a wrong answer: nothing was rejected, so there is nothing to retry differently.
+    #[error("authentication was cancelled")]
+    AuthenticationCancelled,
+
+    /// A responder returned the wrong number of answers.
+    #[error("the server asked {asked} question(s) and got {answered} answer(s)")]
+    InteractiveAnswerCount {
+        /// Prompts the server sent.
+        asked: usize,
+        /// Answers supplied.
+        answered: usize,
+    },
+
+    /// The server kept asking questions.
+    #[error("the server asked too many rounds of questions")]
+    TooManyInteractiveRounds,
 }
 
 /// Where to connect.

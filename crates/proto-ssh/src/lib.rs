@@ -36,7 +36,7 @@ pub mod known_hosts;
 pub mod ssh_config;
 pub mod transport;
 
-pub use auth::Auth;
+pub use auth::{Auth, InteractivePrompt, PromptResponder};
 pub use host_key::{HostKeyDecision, HostKeyOutcome, HostKeyVerifier, StrictVerifier};
 pub use known_hosts::{HostKey, HostsError, KnownHosts, Marker, Verdict};
 pub use ssh_config::{JumpHop, Query, QueryContext, SshConfig};
