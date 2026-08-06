@@ -22,7 +22,6 @@ use bestterm_transport::{
     ExitInfo, GridSize, OpenTransport, Result as TransportResult, Transport, TransportError,
     TransportEvent, TransportKind,
 };
-use crossbeam_channel::Sender;
 use russh::client::{self, Handle};
 use russh::keys::ssh_key;
 use russh::{ChannelMsg, Disconnect};
