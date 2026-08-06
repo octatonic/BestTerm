@@ -259,6 +259,93 @@ async fn a_wrong_password_is_an_authentication_failure_not_a_host_key_problem() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_forward_carries_bytes_both_ways() {
+    // Forwarded to the test server's own port, so there is something real on the far end. Its SSH
+    // banner arriving on a plain TCP socket proves the whole path: listener, direct-tcpip channel,
+    // and the copy in both directions.
+    use tokio::io::AsyncReadExt as _;
+
+    let server = server_or_skip!();
+
+    let connection = Arc::new(
+        SshConnection::connect(
+            server.target(),
+            Auth::Password(Secret::new(server.password.clone())),
+            Arc::new(server.known_hosts()),
+            Arc::new(StrictVerifier),
+        )
+        .await
+        .expect("connects"),
+    );
+
+    // Port 0: let the operating system choose, rather than guessing what is free on a CI runner.
+    let forward = connection
+        .open_local_forward("127.0.0.1", 0, server.host.clone(), server.port)
+        .await
+        .expect("opens a local forward");
+
+    assert_ne!(forward.local_addr().port(), 0, "a real port was bound");
+    assert_eq!(forward.target(), format!("{}:{}", server.host, server.port));
+
+    let mut socket = tokio::net::TcpStream::connect(forward.local_addr())
+        .await
+        .expect("connects to the forwarded port");
+
+    let mut banner = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut banner))
+        .await
+        .expect("the far end answered in time")
+        .expect("reads the banner");
+
+    assert_eq!(
+        &banner, b"SSH-",
+        "expected the server's banner through the tunnel, got {banner:?}"
+    );
+
+    drop(forward);
+    connection.disconnect().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_forward_releases_its_port() {
+    // A forward that outlived its handle would leave a port bound with nothing able to close it,
+    // and the next attempt would fail with "address in use" for no visible reason.
+    let server = server_or_skip!();
+
+    let connection = Arc::new(
+        SshConnection::connect(
+            server.target(),
+            Auth::Password(Secret::new(server.password.clone())),
+            Arc::new(server.known_hosts()),
+            Arc::new(StrictVerifier),
+        )
+        .await
+        .expect("connects"),
+    );
+
+    let forward = connection
+        .open_local_forward("127.0.0.1", 0, server.host.clone(), server.port)
+        .await
+        .expect("opens a local forward");
+    let port = forward.local_addr().port();
+    drop(forward);
+
+    // Rebinding the same port is the observable proof that the listener is gone.
+    let rebound = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                return listener;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(rebound.is_ok(), "the port was never released");
+
+    connection.disconnect().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_jump_chain_tunnels_through_a_bastion() {
     // The same server plays both bastion and destination. That is enough to prove the mechanism:
     // the second connection is carried inside a direct-tcpip channel of the first, does its own key

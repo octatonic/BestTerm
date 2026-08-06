@@ -103,6 +103,12 @@ pub enum SshError {
     /// The server kept asking questions.
     #[error("the server asked too many rounds of questions")]
     TooManyInteractiveRounds,
+
+    /// A local socket could not be opened.
+    ///
+    /// Almost always a forward asking for a port something else already has.
+    #[error("i/o error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Where to connect.
@@ -396,6 +402,27 @@ impl SshConnection {
             }),
             events: events_rx,
         })
+    }
+
+    /// Open a `direct-tcpip` channel: ask the server to connect somewhere on our behalf.
+    ///
+    /// The building block of both jump chains and local forwards.
+    pub(crate) async fn open_direct_tcpip(
+        &self,
+        host: impl Into<String>,
+        port: u16,
+        originator_address: impl Into<String>,
+        originator_port: u16,
+    ) -> Result<russh::Channel<client::Msg>, SshError> {
+        Ok(self
+            .handle
+            .channel_open_direct_tcpip(
+                host.into(),
+                u32::from(port),
+                originator_address.into(),
+                u32::from(originator_port),
+            )
+            .await?)
     }
 
     /// Close the connection and every channel on it.

@@ -10,9 +10,10 @@
 //! * [`host_key`] decides *who answers* when the situation needs a decision, keeping the policy —
 //!   prompt the user, accept nothing new, a fixed answer in a test — out of the connection code.
 //! * [`auth`] proves who we are: password, a private key on disk, or the machine's SSH agent.
-//! * [`transport`] is the connection itself, on `russh`.
+//! * [`transport`] is the connection itself, on `russh`, including jump chains.
+//! * [`forward`] carries local ports across it.
 //!
-//! Keyboard-interactive, jump chains and port forwarding follow.
+//! Remote and dynamic forwards follow.
 //!
 //! # Example
 //!
@@ -31,12 +32,14 @@
 //! ```
 
 pub mod auth;
+pub mod forward;
 pub mod host_key;
 pub mod known_hosts;
 pub mod ssh_config;
 pub mod transport;
 
 pub use auth::{Auth, InteractivePrompt, PromptResponder};
+pub use forward::LocalForward;
 pub use host_key::{HostKeyDecision, HostKeyOutcome, HostKeyVerifier, StrictVerifier};
 pub use known_hosts::{HostKey, HostsError, KnownHosts, Marker, Verdict};
 pub use ssh_config::{JumpHop, Query, QueryContext, SshConfig};
