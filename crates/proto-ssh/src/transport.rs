@@ -156,7 +156,7 @@ pub struct SshConnection {
     /// Held because dropping a link closes everything tunnelled through it. Without this the chain
     /// would collapse the moment the intermediate connections went out of scope, and the failure
     /// would look like the destination hanging up.
-    via: Vec<Box<SshConnection>>,
+    via: Vec<SshConnection>,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -223,7 +223,7 @@ impl SshConnection {
         destination: Hop,
         known_hosts: Arc<KnownHosts>,
     ) -> Result<Self, SshError> {
-        let mut via: Vec<Box<SshConnection>> = Vec::new();
+        let mut via: Vec<SshConnection> = Vec::new();
 
         for hop in chain {
             let next = match via.last() {
@@ -232,7 +232,7 @@ impl SshConnection {
                 }
                 Some(previous) => previous.connect_onward(hop, known_hosts.clone()).await?,
             };
-            via.push(Box::new(next));
+            via.push(next);
         }
 
         let mut connection = match via.last() {
