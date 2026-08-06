@@ -515,13 +515,7 @@ impl client::Handler for Handler {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_password_never_reaches_a_log_through_debug() {
-        let auth = Auth::Password("hunter2".to_string());
-        let printed = format!("{auth:?}");
-        assert_eq!(printed, "Password(<redacted>)");
-        assert!(!printed.contains("hunter2"));
-    }
+    // Credential redaction is tested next to the type it belongs to, in `auth`.
 
     #[test]
     fn a_host_key_rejection_reads_differently_from_an_auth_failure() {
