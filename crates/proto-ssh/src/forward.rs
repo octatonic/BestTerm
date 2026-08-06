@@ -94,12 +94,7 @@ impl SshConnection {
                 // serving the next one.
                 tokio::spawn(async move {
                     let channel = connection
-                        .open_direct_tcpip(
-                            host,
-                            target_port,
-                            peer.ip().to_string(),
-                            peer.port(),
-                        )
+                        .open_direct_tcpip(host, target_port, peer.ip().to_string(), peer.port())
                         .await;
 
                     match channel {

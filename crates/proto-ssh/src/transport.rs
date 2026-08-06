@@ -270,25 +270,21 @@ impl SshConnection {
             )
             .await?;
 
-        let checker = HostKeyChecker::new(
-            &hop.target.host,
-            hop.target.port,
-            known_hosts,
-            hop.verifier,
-        );
+        let checker =
+            HostKeyChecker::new(&hop.target.host, hop.target.port, known_hosts, hop.verifier);
         let handler = Handler {
             checker: checker.clone(),
         };
         let config = Arc::new(client::Config::default());
 
-        let mut handle =
-            match client::connect_stream(config, channel.into_stream(), handler).await {
-                Ok(handle) => handle,
-                Err(SshError::Ssh(russh::Error::UnknownKey)) => {
-                    return Err(SshError::HostKeyRejected);
-                }
-                Err(other) => return Err(other),
-            };
+        let mut handle = match client::connect_stream(config, channel.into_stream(), handler).await
+        {
+            Ok(handle) => handle,
+            Err(SshError::Ssh(russh::Error::UnknownKey)) => {
+                return Err(SshError::HostKeyRejected);
+            }
+            Err(other) => return Err(other),
+        };
 
         crate::auth::authenticate(&mut handle, &hop.target.user, &hop.auth).await?;
 

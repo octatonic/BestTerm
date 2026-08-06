@@ -369,7 +369,9 @@ async fn a_jump_chain_tunnels_through_a_bastion() {
         .await
         .expect("opens a shell through the tunnel");
     let mut transport = open.transport;
-    transport.write(b"echo through-the-tunnel\n").expect("writes");
+    transport
+        .write(b"echo through-the-tunnel\n")
+        .expect("writes");
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut seen = String::new();

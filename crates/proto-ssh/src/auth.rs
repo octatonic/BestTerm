@@ -161,10 +161,7 @@ async fn authenticate_with_key(
 ///
 /// The order is the user's: it is how they arranged their agent. Trying them in some other order
 /// would surprise anyone who has put the key they want first.
-async fn authenticate_with_agent(
-    handle: &mut Handle<Handler>,
-    user: &str,
-) -> Result<(), SshError> {
+async fn authenticate_with_agent(handle: &mut Handle<Handler>, user: &str) -> Result<(), SshError> {
     let mut agent = connect_agent().await?;
     let identities = agent
         .request_identities()
@@ -283,17 +280,18 @@ fn rsa_hash_alg(algorithm: &Algorithm) -> Option<HashAlg> {
 }
 
 #[cfg(unix)]
-async fn connect_agent() -> Result<russh::keys::agent::client::AgentClient<tokio::net::UnixStream>, SshError>
-{
+async fn connect_agent()
+-> Result<russh::keys::agent::client::AgentClient<tokio::net::UnixStream>, SshError> {
     russh::keys::agent::client::AgentClient::connect_env()
         .await
         .map_err(|error| SshError::Agent(error.to_string()))
 }
 
 #[cfg(windows)]
-async fn connect_agent()
--> Result<russh::keys::agent::client::AgentClient<russh::keys::agent::client::pageant::PageantStream>, SshError>
-{
+async fn connect_agent() -> Result<
+    russh::keys::agent::client::AgentClient<russh::keys::agent::client::pageant::PageantStream>,
+    SshError,
+> {
     russh::keys::agent::client::AgentClient::connect_pageant()
         .await
         .map_err(|error| SshError::Agent(error.to_string()))
