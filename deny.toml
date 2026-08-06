@@ -59,7 +59,28 @@ skip-tree = []
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack": the `rsa` crate's private-key operations
+    # are not constant-time, so an observer who can measure them may be able to
+    # recover the key. Reached through russh -> rsa.
+    #
+    # Accepted, deliberately and with a way out:
+    #
+    # * There is no fixed version. The advisory says a constant-time rewrite is
+    #   under way; until it lands there is nothing to upgrade to.
+    # * Turning it off costs more than it saves. `rsa` is a default feature of
+    #   russh and gates `ssh-key/rsa`, which covers RSA *host key verification*
+    #   as well as client keys. Disabling it would make BestTerm unable to
+    #   connect to any server that offers only an RSA host key — still a large
+    #   share of older infrastructure — to remove a timing sidechannel that only
+    #   applies when the *user* authenticates with an RSA private key.
+    # * The exposure is narrow: verifying a server's RSA host key is a public-key
+    #   operation and is not affected.
+    #
+    # Revisit when the `rsa` crate ships the constant-time implementation, or if
+    # russh gains a way to keep RSA verification without RSA signing.
+    { id = "RUSTSEC-2023-0071", reason = "no fixed version exists; disabling RSA would drop host key verification for older servers" },
+]
 
 [sources]
 unknown-registry = "deny"

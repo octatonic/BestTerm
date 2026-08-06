@@ -41,7 +41,13 @@ pub trait HostKeyVerifier: Send + Sync {
 pub struct StrictVerifier;
 
 impl HostKeyVerifier for StrictVerifier {
-    fn decide(&self, _host: &str, _port: u16, _key: &HostKey, verdict: &Verdict) -> HostKeyDecision {
+    fn decide(
+        &self,
+        _host: &str,
+        _port: u16,
+        _key: &HostKey,
+        verdict: &Verdict,
+    ) -> HostKeyDecision {
         match verdict {
             Verdict::Trusted => HostKeyDecision::Accept,
             _ => HostKeyDecision::Reject,
@@ -185,12 +191,7 @@ mod tests {
     }
 
     fn checker_with(text: &str, verifier: Arc<dyn HostKeyVerifier>) -> HostKeyChecker {
-        HostKeyChecker::new(
-            "srv.int",
-            22,
-            Arc::new(KnownHosts::parse(text)),
-            verifier,
-        )
+        HostKeyChecker::new("srv.int", 22, Arc::new(KnownHosts::parse(text)), verifier)
     }
 
     fn recorded(byte: u8) -> String {

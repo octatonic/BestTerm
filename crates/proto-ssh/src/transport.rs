@@ -177,11 +177,7 @@ impl SshConnection {
     }
 
     /// Open a shell with a pseudo-terminal.
-    pub async fn open_shell(
-        &self,
-        size: GridSize,
-        term: &str,
-    ) -> Result<OpenTransport, SshError> {
+    pub async fn open_shell(&self, size: GridSize, term: &str) -> Result<OpenTransport, SshError> {
         let channel = self.handle.channel_open_session().await?;
 
         channel
@@ -210,7 +206,10 @@ impl SshConnection {
                     // stderr is merged into the same stream: a terminal shows both, and separating
                     // them would reorder output that the remote program interleaved on purpose.
                     ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
-                        if events_tx.send(TransportEvent::Output(data.to_vec())).is_err() {
+                        if events_tx
+                            .send(TransportEvent::Output(data.to_vec()))
+                            .is_err()
+                        {
                             return;
                         }
                     }
