@@ -5,9 +5,14 @@
 //!
 //! # The agent is platform-split
 //!
-//! `russh` reaches a Unix agent over `SSH_AUTH_SOCK` and a Windows one over Pageant's named pipe,
-//! and the two constructors are behind `cfg`. The split is handled here rather than leaked to
-//! callers: [`Auth::Agent`] means "whatever agent this machine has".
+//! Three transports, all behind `cfg`: a Unix socket named by `SSH_AUTH_SOCK`, the named pipe of the
+//! OpenSSH agent that ships with Windows, and Pageant's channel. The split is handled here rather
+//! than leaked to callers — [`Auth::Agent`] means "whatever agent this machine has" — and on Windows
+//! both agents are tried, because they are different products rather than two names for one.
+//!
+//! None of those concrete types appears in a signature. One of them cannot: `russh` uses Pageant's
+//! stream internally without re-exporting it, so it is not nameable from here at all. The shared
+//! logic is generic over the transport and the type is inferred at each call site.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,7 +20,9 @@ use std::sync::Arc;
 use bestterm_core_vault::Secret;
 use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::AgentIdentity;
+use russh::keys::agent::client::AgentClient;
 use russh::keys::{Algorithm, HashAlg, PrivateKeyWithHashAlg, load_secret_key};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::transport::{Handler, SshError};
 
@@ -161,8 +168,49 @@ async fn authenticate_with_key(
 ///
 /// The order is the user's: it is how they arranged their agent. Trying them in some other order
 /// would surprise anyone who has put the key they want first.
+#[cfg(unix)]
 async fn authenticate_with_agent(handle: &mut Handle<Handler>, user: &str) -> Result<(), SshError> {
-    let mut agent = connect_agent().await?;
+    let mut agent = AgentClient::connect_env()
+        .await
+        .map_err(|error| SshError::Agent(error.to_string()))?;
+    offer_agent_identities(handle, user, &mut agent).await
+}
+
+#[cfg(windows)]
+async fn authenticate_with_agent(handle: &mut Handle<Handler>, user: &str) -> Result<(), SshError> {
+    /// Where the agent that ships with Windows listens.
+    const OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+
+    // Windows has two agents in common use and they are different things, not two names for one.
+    // OpenSSH's comes with the operating system, so it is tried first; Pageant is PuTTY's and is
+    // what a long-time Windows user is more likely to already have running.
+    match AgentClient::connect_named_pipe(OPENSSH_AGENT_PIPE).await {
+        Ok(mut agent) => return offer_agent_identities(handle, user, &mut agent).await,
+        Err(error) => {
+            tracing::debug!(%error, "no OpenSSH agent pipe; trying Pageant");
+        }
+    }
+
+    let mut agent = AgentClient::connect_pageant()
+        .await
+        .map_err(|error| SshError::Agent(error.to_string()))?;
+    offer_agent_identities(handle, user, &mut agent).await
+}
+
+/// Offer each identity the agent holds until one is accepted.
+///
+/// Generic over the agent's transport because the concrete types differ per platform — a Unix
+/// socket, a Windows named pipe, Pageant's shared memory — and one of them, Pageant's, is not a
+/// type this crate can even name: `russh` uses it internally without re-exporting it. Inferring it
+/// at the call site sidesteps that entirely.
+async fn offer_agent_identities<S>(
+    handle: &mut Handle<Handler>,
+    user: &str,
+    agent: &mut AgentClient<S>,
+) -> Result<(), SshError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     let identities = agent
         .request_identities()
         .await
@@ -277,24 +325,6 @@ fn rsa_hash_alg(algorithm: &Algorithm) -> Option<HashAlg> {
         Algorithm::Rsa { .. } => Some(HashAlg::Sha256),
         _ => None,
     }
-}
-
-#[cfg(unix)]
-async fn connect_agent()
--> Result<russh::keys::agent::client::AgentClient<tokio::net::UnixStream>, SshError> {
-    russh::keys::agent::client::AgentClient::connect_env()
-        .await
-        .map_err(|error| SshError::Agent(error.to_string()))
-}
-
-#[cfg(windows)]
-async fn connect_agent() -> Result<
-    russh::keys::agent::client::AgentClient<russh::keys::agent::client::pageant::PageantStream>,
-    SshError,
-> {
-    russh::keys::agent::client::AgentClient::connect_pageant()
-        .await
-        .map_err(|error| SshError::Agent(error.to_string()))
 }
 
 /// Expand a leading `~`.
