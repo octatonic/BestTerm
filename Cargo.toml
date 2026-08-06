@@ -59,6 +59,20 @@ directories = "6.0"
 # path-derived and sequentially-allocated ids. See crates/core-model/src/id.rs.
 uuid = { version = "1.24", features = ["v4", "serde"] }
 
+# ---- SSH ----------------------------------------------------------------------
+# Pure Rust, async, client and server. Chosen over libssh2 bindings for the
+# reasons in docs/ARCHITECTURE.md: BestTerm needs in-process control of channels
+# so an SFTP panel can share the terminal's connection.
+russh = "0.62"
+tokio = { version = "1.53", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "macros",
+] }
+
 # ---- cryptography -----------------------------------------------------------
 # All RustCrypto, all MIT OR Apache-2.0. The vault's design is documented in
 # crates/core-vault/src/lib.rs; these are the primitives it is built from.

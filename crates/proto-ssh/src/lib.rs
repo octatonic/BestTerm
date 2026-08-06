@@ -7,8 +7,11 @@
 //!   an inconvenience.
 //! * [`ssh_config`] reads `~/.ssh/config`, so BestTerm inherits a setup someone already has instead
 //!   of asking them to enter it all again.
+//! * [`host_key`] decides *who answers* when the situation needs a decision, keeping the policy —
+//!   prompt the user, accept nothing new, a fixed answer in a test — out of the connection code.
+//! * [`transport`] is the connection itself, on `russh`.
 //!
-//! The `russh` transport, authentication and channel multiplexing follow.
+//! Public-key and agent authentication, jump chains and port forwarding follow.
 //!
 //! # Example
 //!
@@ -26,8 +29,12 @@
 //! ));
 //! ```
 
+pub mod host_key;
 pub mod known_hosts;
 pub mod ssh_config;
+pub mod transport;
 
+pub use host_key::{HostKeyDecision, HostKeyOutcome, HostKeyVerifier, StrictVerifier};
 pub use known_hosts::{HostKey, HostsError, KnownHosts, Marker, Verdict};
 pub use ssh_config::{JumpHop, Query, QueryContext, SshConfig};
+pub use transport::{Auth, SshConnection, SshError, Target};
