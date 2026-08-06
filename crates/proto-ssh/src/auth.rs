@@ -229,8 +229,10 @@ where
         };
 
         let hash_alg = rsa_hash_alg(&key.algorithm());
+        // Reborrowed rather than `&mut agent`: `agent` is already a `&mut`, and taking a reference
+        // to it would ask for `Signer` on `&mut AgentClient<_>`, which is not what is implemented.
         let result = handle
-            .authenticate_publickey_with(user.to_string(), key, hash_alg, &mut agent)
+            .authenticate_publickey_with(user.to_string(), key, hash_alg, &mut *agent)
             .await
             .map_err(|error| SshError::Agent(error.to_string()))?;
 
