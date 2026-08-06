@@ -27,6 +27,7 @@ use russh::keys::ssh_key;
 use russh::{ChannelMsg, Disconnect};
 use tokio::sync::mpsc;
 
+use crate::auth::Auth;
 use crate::host_key::{HostKeyChecker, HostKeyOutcome, HostKeyVerifier, host_key_from_ssh};
 use crate::known_hosts::KnownHosts;
 
@@ -115,11 +116,41 @@ pub struct Target {
     pub user: String,
 }
 
+/// One link in a connection: where to go, how to prove who we are, and who decides about its key.
+///
+/// A jump host is a full SSH connection with its own everything. OpenSSH is explicit that "the
+/// configuration for the destination host is not generally applied to jump hosts", and treating a
+/// bastion as a mere address — reusing the destination's credentials and skipping its host key
+/// check — is how a chain quietly stops being verified.
+pub struct Hop {
+    /// Where this link goes.
+    pub target: Target,
+    /// How to authenticate to it.
+    pub auth: Auth,
+    /// Who decides about its host key.
+    pub verifier: Arc<dyn HostKeyVerifier>,
+}
+
+impl std::fmt::Debug for Hop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Hop")
+            .field("target", &self.target)
+            .field("auth", &self.auth)
+            .finish_non_exhaustive()
+    }
+}
+
 /// An authenticated SSH connection.
 pub struct SshConnection {
     handle: Handle<Handler>,
     checker: HostKeyChecker,
     target: Target,
+    /// Connections this one is carried over, outermost first.
+    ///
+    /// Held because dropping a link closes everything tunnelled through it. Without this the chain
+    /// would collapse the moment the intermediate connections went out of scope, and the failure
+    /// would look like the destination hanging up.
+    via: Vec<Box<SshConnection>>,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -170,6 +201,103 @@ impl SshConnection {
             handle,
             checker,
             target,
+            via: Vec::new(),
+        })
+    }
+
+    /// Connect to `destination` through a chain of jump hosts, nearest first.
+    ///
+    /// Every hop is a full SSH connection: its own host key check, its own credentials. An empty
+    /// chain is the same as [`SshConnection::connect`].
+    ///
+    /// The intermediate connections are kept inside the returned one, so the caller holds the whole
+    /// chain by holding the destination.
+    pub async fn connect_via(
+        chain: Vec<Hop>,
+        destination: Hop,
+        known_hosts: Arc<KnownHosts>,
+    ) -> Result<Self, SshError> {
+        let mut via: Vec<Box<SshConnection>> = Vec::new();
+
+        for hop in chain {
+            let next = match via.last() {
+                None => {
+                    Self::connect(hop.target, hop.auth, known_hosts.clone(), hop.verifier).await?
+                }
+                Some(previous) => previous.connect_onward(hop, known_hosts.clone()).await?,
+            };
+            via.push(Box::new(next));
+        }
+
+        let mut connection = match via.last() {
+            None => {
+                Self::connect(
+                    destination.target,
+                    destination.auth,
+                    known_hosts.clone(),
+                    destination.verifier,
+                )
+                .await?
+            }
+            Some(previous) => previous.connect_onward(destination, known_hosts).await?,
+        };
+
+        connection.via = via;
+        Ok(connection)
+    }
+
+    /// Open an SSH connection to `hop` tunnelled through this one.
+    async fn connect_onward(
+        &self,
+        hop: Hop,
+        known_hosts: Arc<KnownHosts>,
+    ) -> Result<Self, SshError> {
+        let channel = self
+            .handle
+            .channel_open_direct_tcpip(
+                hop.target.host.clone(),
+                u32::from(hop.target.port),
+                // The originator fields describe who asked for the forward. Servers log them; none
+                // of them route anything, so loopback and zero are both truthful and uninformative.
+                "127.0.0.1",
+                0,
+            )
+            .await?;
+
+        let checker = HostKeyChecker::new(
+            &hop.target.host,
+            hop.target.port,
+            known_hosts,
+            hop.verifier,
+        );
+        let handler = Handler {
+            checker: checker.clone(),
+        };
+        let config = Arc::new(client::Config::default());
+
+        let mut handle =
+            match client::connect_stream(config, channel.into_stream(), handler).await {
+                Ok(handle) => handle,
+                Err(SshError::Ssh(russh::Error::UnknownKey)) => {
+                    return Err(SshError::HostKeyRejected);
+                }
+                Err(other) => return Err(other),
+            };
+
+        crate::auth::authenticate(&mut handle, &hop.target.user, &hop.auth).await?;
+
+        tracing::info!(
+            host = %hop.target.host,
+            port = hop.target.port,
+            through = %self.target.host,
+            "ssh connected through a jump host"
+        );
+
+        Ok(Self {
+            handle,
+            checker,
+            target: hop.target,
+            via: Vec::new(),
         })
     }
 

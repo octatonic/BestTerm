@@ -40,4 +40,4 @@ pub use auth::{Auth, InteractivePrompt, PromptResponder};
 pub use host_key::{HostKeyDecision, HostKeyOutcome, HostKeyVerifier, StrictVerifier};
 pub use known_hosts::{HostKey, HostsError, KnownHosts, Marker, Verdict};
 pub use ssh_config::{JumpHop, Query, QueryContext, SshConfig};
-pub use transport::{SshConnection, SshError, Target};
+pub use transport::{Hop, SshConnection, SshError, Target};

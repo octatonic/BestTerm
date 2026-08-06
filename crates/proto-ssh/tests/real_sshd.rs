@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use bestterm_core_vault::Secret;
 use bestterm_proto_ssh::host_key::{HostKeyDecision, HostKeyVerifier};
 use bestterm_proto_ssh::known_hosts::{HostKey, KnownHosts, Verdict};
-use bestterm_proto_ssh::{Auth, SshConnection, SshError, StrictVerifier, Target};
+use bestterm_proto_ssh::{Auth, Hop, SshConnection, SshError, StrictVerifier, Target};
 // The trait itself is not imported: `open.transport` is a trait object, and methods on one are
 // callable without the trait in scope.
 use bestterm_transport::{GridSize, TransportEvent};
@@ -256,6 +256,91 @@ async fn a_wrong_password_is_an_authentication_failure_not_a_host_key_problem() 
         matches!(error, SshError::AuthenticationFailed { .. }),
         "the two failures must stay distinguishable; got {error:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jump_chain_tunnels_through_a_bastion() {
+    // The same server plays both bastion and destination. That is enough to prove the mechanism:
+    // the second connection is carried inside a direct-tcpip channel of the first, does its own key
+    // exchange, and authenticates separately.
+    let server = server_or_skip!();
+    let known_hosts = Arc::new(server.known_hosts());
+
+    let hop = || Hop {
+        target: server.target(),
+        auth: Auth::Password(Secret::new(server.password.clone())),
+        verifier: Arc::new(StrictVerifier),
+    };
+
+    let connection = SshConnection::connect_via(vec![hop()], hop(), known_hosts)
+        .await
+        .expect("a chain of one bastion should connect");
+
+    // The far end works like any other connection.
+    let open = connection
+        .open_shell(GridSize::new(80, 24), "xterm-256color")
+        .await
+        .expect("opens a shell through the tunnel");
+    let mut transport = open.transport;
+    transport.write(b"echo through-the-tunnel\n").expect("writes");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen = String::new();
+    while Instant::now() < deadline && seen.matches("through-the-tunnel").count() < 2 {
+        if let Ok(TransportEvent::Output(bytes)) =
+            open.events.recv_timeout(Duration::from_millis(500))
+        {
+            seen.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    assert!(
+        seen.contains("through-the-tunnel"),
+        "no output came back through the tunnel; saw:\n{seen}"
+    );
+
+    transport.shutdown().expect("shuts down");
+    connection.disconnect().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jump_host_gets_its_own_host_key_check() {
+    // A bastion whose key is not recognised must stop the chain before the destination is reached.
+    // Treating a jump host as a mere address is how a chain quietly stops being verified.
+    let server = server_or_skip!();
+
+    let hop = || Hop {
+        target: server.target(),
+        auth: Auth::Password(Secret::new(server.password.clone())),
+        verifier: Arc::new(StrictVerifier),
+    };
+
+    let error = SshConnection::connect_via(vec![hop()], hop(), Arc::new(KnownHosts::new()))
+        .await
+        .expect_err("an unverified bastion must stop the chain");
+    assert!(matches!(error, SshError::HostKeyRejected), "got {error:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_empty_chain_is_an_ordinary_connection() {
+    let server = server_or_skip!();
+
+    let connection = SshConnection::connect_via(
+        Vec::new(),
+        Hop {
+            target: server.target(),
+            auth: Auth::Password(Secret::new(server.password.clone())),
+            verifier: Arc::new(StrictVerifier),
+        },
+        Arc::new(server.known_hosts()),
+    )
+    .await
+    .expect("no hops is just a connection");
+
+    assert_eq!(
+        connection.host_key_outcome().expect("checked").verdict,
+        Verdict::Trusted
+    );
+    connection.disconnect().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
