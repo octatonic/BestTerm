@@ -28,6 +28,7 @@ use russh::{ChannelMsg, Disconnect};
 use tokio::sync::mpsc;
 
 use crate::auth::Auth;
+use crate::forward::{ForwardRegistry, Incoming};
 use crate::host_key::{HostKeyChecker, HostKeyOutcome, HostKeyVerifier, host_key_from_ssh};
 use crate::known_hosts::KnownHosts;
 
@@ -109,6 +110,26 @@ pub enum SshError {
     /// Almost always a forward asking for a port something else already has.
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// The server would not listen on our behalf.
+    ///
+    /// Usually a port below 1024, a port already taken on the server, or `GatewayPorts no` refusing
+    /// a bind address other than loopback. The server does not say which, so the message says where
+    /// to look rather than guessing.
+    #[error("the server refused to listen on {address}:{port}")]
+    ForwardDenied {
+        /// The address asked for.
+        address: String,
+        /// The port asked for.
+        port: u16,
+    },
+
+    /// The server allocated a port outside the range a port number can hold.
+    ///
+    /// Cannot happen against a correct server; checked because the wire type is 32 bits and
+    /// truncating would silently point a forward at the wrong port.
+    #[error("the server allocated an impossible port number {0}")]
+    ImpossiblePort(u32),
 }
 
 /// Where to connect.
@@ -157,6 +178,10 @@ pub struct SshConnection {
     /// would collapse the moment the intermediate connections went out of scope, and the failure
     /// would look like the destination hanging up.
     via: Vec<SshConnection>,
+    /// Where channels the *server* opens to us are delivered.
+    ///
+    /// Shared with the handler, which is the only thing `russh` gives a look at those channels.
+    forwards: ForwardRegistry,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -181,8 +206,10 @@ impl SshConnection {
     ) -> Result<Self, SshError> {
         let checker = HostKeyChecker::new(&target.host, target.port, known_hosts, verifier);
         let config = Arc::new(client::Config::default());
+        let forwards = ForwardRegistry::default();
         let handler = Handler {
             checker: checker.clone(),
+            forwards: forwards.clone(),
         };
 
         let mut handle =
@@ -208,6 +235,7 @@ impl SshConnection {
             checker,
             target,
             via: Vec::new(),
+            forwards,
         })
     }
 
@@ -272,8 +300,10 @@ impl SshConnection {
 
         let checker =
             HostKeyChecker::new(&hop.target.host, hop.target.port, known_hosts, hop.verifier);
+        let forwards = ForwardRegistry::default();
         let handler = Handler {
             checker: checker.clone(),
+            forwards: forwards.clone(),
         };
         let config = Arc::new(client::Config::default());
 
@@ -300,6 +330,7 @@ impl SshConnection {
             checker,
             target: hop.target,
             via: Vec::new(),
+            forwards,
         })
     }
 
@@ -421,12 +452,69 @@ impl SshConnection {
             .await?)
     }
 
+    /// Ask the server to listen on `address:port` and send us what arrives.
+    ///
+    /// Port `0` asks the server to choose; the chosen port is returned. Delivery is arranged
+    /// separately through the forward registry — this call only makes the request.
+    pub(crate) async fn request_remote_forward(
+        &self,
+        address: &str,
+        port: u16,
+    ) -> Result<u16, SshError> {
+        let allocated = self
+            .handle
+            .tcpip_forward(address.to_string(), u32::from(port))
+            .await
+            .map_err(|error| forward_denied(error, address, port))?;
+
+        // The server returns the allocated port only when one was asked to be chosen; otherwise it
+        // returns 0 and the port is the one we named.
+        if port != 0 {
+            return Ok(port);
+        }
+        u16::try_from(allocated).map_err(|_| SshError::ImpossiblePort(allocated))
+    }
+
+    /// Ask the server to stop listening.
+    pub(crate) async fn cancel_remote_forward(
+        &self,
+        address: &str,
+        port: u16,
+    ) -> Result<(), SshError> {
+        let cancelled = self
+            .handle
+            .cancel_tcpip_forward(address.to_string(), u32::from(port))
+            .await;
+        cancelled.map_err(|error| forward_denied(error, address, port))
+    }
+
+    /// Where server-opened channels are delivered.
+    pub(crate) fn forwards(&self) -> &ForwardRegistry {
+        &self.forwards
+    }
+
     /// Close the connection and every channel on it.
     pub async fn disconnect(&self) {
         let _ = self
             .handle
             .disconnect(Disconnect::ByApplication, "", "en")
             .await;
+    }
+}
+
+/// Name what a refused forward request was refused *for*.
+///
+/// `russh` reports the refusal as a bare `RequestDenied`, which on its own tells a user nothing they
+/// can act on. The server does not say why either, so the message names the address and port and
+/// leaves the diagnosis — a privileged port, one already taken, `GatewayPorts no` — to whoever can
+/// look at the server.
+fn forward_denied(error: russh::Error, address: &str, port: u16) -> SshError {
+    match error {
+        russh::Error::RequestDenied => SshError::ForwardDenied {
+            address: address.to_string(),
+            port,
+        },
+        other => SshError::Ssh(other),
     }
 }
 
@@ -488,9 +576,10 @@ impl Transport for SshTransport {
     }
 }
 
-/// Bridges `russh`'s callbacks to the host key checker.
+/// Bridges `russh`'s callbacks to the host key checker and to remote forwards.
 pub(crate) struct Handler {
     checker: HostKeyChecker,
+    forwards: ForwardRegistry,
 }
 
 impl client::Handler for Handler {
@@ -507,6 +596,48 @@ impl client::Handler for Handler {
         async move {
             let key = converted.map_err(|_| SshError::UnreadableHostKey)?;
             Ok(checker.check(&key))
+        }
+    }
+
+    /// Someone connected to a port the server is holding open for us.
+    ///
+    /// This runs on the session's event loop, so it does nothing that can block: the channel and the
+    /// unanswered `reply` are handed to whichever forward owns the port, and that forward decides —
+    /// off this task — whether the local connection can be made. Answering here instead would stall
+    /// every other channel on the session behind one slow local connect.
+    #[allow(clippy::too_many_arguments)]
+    fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let sink = self.forwards.sink(connected_port);
+        // Formatted eagerly: the future must not borrow the parameters.
+        let connected = format!("{connected_address}:{connected_port}");
+        let originator = format!("{originator_address}:{originator_port}");
+
+        async move {
+            let handed_over = match sink {
+                Some(sink) => sink.send(Incoming { channel, reply }).is_ok(),
+                None => false,
+            };
+
+            if !handed_over {
+                // Reached when a forward was dropped between the server accepting a connection and
+                // this arriving. Nothing is wrong; the far end sees a refusal. `Incoming` was not
+                // sent, so `reply` was dropped, which `russh` turns into exactly this rejection.
+                tracing::debug!(
+                    %connected,
+                    %originator,
+                    "declined a forwarded connection nobody is listening for"
+                );
+            }
+            Ok(())
         }
     }
 }

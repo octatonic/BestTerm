@@ -11,9 +11,8 @@
 //!   prompt the user, accept nothing new, a fixed answer in a test — out of the connection code.
 //! * [`auth`] proves who we are: password, a private key on disk, or the machine's SSH agent.
 //! * [`transport`] is the connection itself, on `russh`, including jump chains.
-//! * [`forward`] carries local ports across it.
-//!
-//! Remote and dynamic forwards follow.
+//! * [`forward`] carries ports across it, in all three directions, with [`socks`] providing the
+//!   protocol a dynamic forward speaks to its clients.
 //!
 //! # Example
 //!
@@ -35,11 +34,12 @@ pub mod auth;
 pub mod forward;
 pub mod host_key;
 pub mod known_hosts;
+pub mod socks;
 pub mod ssh_config;
 pub mod transport;
 
 pub use auth::{Auth, InteractivePrompt, PromptResponder};
-pub use forward::LocalForward;
+pub use forward::{DynamicForward, LocalForward, RemoteForward};
 pub use host_key::{HostKeyDecision, HostKeyOutcome, HostKeyVerifier, StrictVerifier};
 pub use known_hosts::{HostKey, HostsError, KnownHosts, Marker, Verdict};
 pub use ssh_config::{JumpHop, Query, QueryContext, SshConfig};

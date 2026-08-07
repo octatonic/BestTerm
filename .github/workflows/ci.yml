@@ -87,6 +87,10 @@ jobs:
           UsePAM no
           StrictModes no
           AllowUsers bestterm-test
+          # Both defaults, stated so the forwarding tests do not depend on a distribution
+          # keeping them. GatewayPorts stays off: the tests bind loopback on purpose.
+          AllowTcpForwarding yes
+          GatewayPorts no
           LogLevel VERBOSE
           CONF
 

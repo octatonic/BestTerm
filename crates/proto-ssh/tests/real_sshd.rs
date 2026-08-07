@@ -508,3 +508,217 @@ async fn a_shell_runs_a_command_and_closes_cleanly() {
     transport.shutdown().expect("shuts down");
     connection.disconnect().await;
 }
+
+/// A SOCKS5 CONNECT request for `host:port`, using the domain form.
+///
+/// The domain form on purpose: it is the one a browser uses, and the one where the name has to reach
+/// the server unresolved.
+fn socks_connect_request(host: &str, port: u16) -> Vec<u8> {
+    let length = u8::try_from(host.len()).expect("test host names are short");
+    let mut request = vec![0x05, 0x01, 0x00, 0x03, length];
+    request.extend_from_slice(host.as_bytes());
+    request.extend_from_slice(&port.to_be_bytes());
+    request
+}
+
+/// A connection to the test server, authenticated by password against its recorded key.
+async fn connect_to(server: &Server) -> Arc<SshConnection> {
+    Arc::new(
+        SshConnection::connect(
+            server.target(),
+            Auth::Password(Secret::new(server.password.clone())),
+            Arc::new(server.known_hosts()),
+            Arc::new(StrictVerifier),
+        )
+        .await
+        .expect("connects"),
+    )
+}
+
+/// Complete the SOCKS5 greeting, leaving the socket ready for a request.
+async fn socks_greet(socket: &mut tokio::net::TcpStream) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    socket
+        .write_all(&[0x05, 0x01, 0x00])
+        .await
+        .expect("sends the greeting");
+    let mut selection = [0u8; 2];
+    socket
+        .read_exact(&mut selection)
+        .await
+        .expect("reads the method selection");
+    assert_eq!(&selection, &[0x05, 0x00], "expected SOCKS5, no auth");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_forward_carries_bytes_from_the_server_back_here() {
+    // The round trip uses nothing but SSH. A listener here stands in for the service the server
+    // should be able to reach; the server's new listening port is reached through a *local* forward,
+    // so the test needs no tooling on the far side and no shell that happens to have /dev/tcp.
+    //
+    //   us -> local forward -> server -> the server's own loopback -> remote forward -> us
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let server = server_or_skip!();
+    let connection = connect_to(&server).await;
+
+    let local = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("binds a local service");
+    let local_port = local.local_addr().expect("has an address").port();
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = local.accept().await {
+            let _ = socket.write_all(b"pong").await;
+        }
+    });
+
+    // Port 0: the server chooses, rather than guessing what is free on a CI runner.
+    let remote = connection
+        .open_remote_forward("127.0.0.1", 0, "127.0.0.1", local_port)
+        .await
+        .expect("opens a remote forward");
+
+    assert_ne!(remote.remote_port(), 0, "the server allocated a real port");
+    assert_eq!(remote.target(), format!("127.0.0.1:{local_port}"));
+
+    let reach = connection
+        .open_local_forward("127.0.0.1", 0, "127.0.0.1", remote.remote_port())
+        .await
+        .expect("reaches the server's new listener");
+
+    let mut socket = tokio::net::TcpStream::connect(reach.local_addr())
+        .await
+        .expect("connects to the server's forwarded port");
+
+    let mut answer = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut answer))
+        .await
+        .expect("the round trip finished in time")
+        .expect("reads the answer");
+
+    assert_eq!(&answer, b"pong", "expected the local service to answer");
+
+    connection.disconnect().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_remote_forward_releases_the_port_on_the_server() {
+    // Dropping stops delivery here; only `close` tells the server to stop listening. Asking for the
+    // same port again is the observable difference, because the server refuses one it still holds.
+    let server = server_or_skip!();
+    let connection = connect_to(&server).await;
+
+    // Port 9 is discard: a plausible target that is never connected to in this test.
+    let forward = connection
+        .open_remote_forward("127.0.0.1", 0, "127.0.0.1", 9)
+        .await
+        .expect("opens a remote forward");
+    let port = forward.remote_port();
+    forward.close().await.expect("the server released the port");
+
+    // Retried briefly: a listening socket going away is not instantaneous when observed from the
+    // other end of a network round trip, and one bare attempt would be a flake waiting to happen.
+    let reopened = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match connection
+                .open_remote_forward("127.0.0.1", port, "127.0.0.1", 9)
+                .await
+            {
+                Ok(forward) => return forward,
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    })
+    .await;
+
+    assert!(
+        reopened.is_ok(),
+        "the server never let go of port {port}, so the cancel did not arrive"
+    );
+
+    connection.disconnect().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dynamic_forward_proxies_a_connection_through_the_server() {
+    // Pointed at the test server's own SSH port, so there is something real on the far end. Its
+    // banner arriving after a SOCKS5 exchange proves the whole path: the handshake, the name leaving
+    // unresolved, the direct-tcpip channel, and the copy.
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let server = server_or_skip!();
+    let connection = connect_to(&server).await;
+
+    let proxy = connection
+        .open_dynamic_forward("127.0.0.1", 0)
+        .await
+        .expect("opens a dynamic forward");
+    assert_ne!(proxy.local_addr().port(), 0, "a real port was bound");
+
+    let mut socket = tokio::net::TcpStream::connect(proxy.local_addr())
+        .await
+        .expect("connects to the proxy");
+    socks_greet(&mut socket).await;
+
+    socket
+        .write_all(&socks_connect_request(&server.host, server.port))
+        .await
+        .expect("sends the request");
+
+    let mut reply = [0u8; 10];
+    tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut reply))
+        .await
+        .expect("the proxy answered in time")
+        .expect("reads the reply");
+    assert_eq!(reply[1], 0x00, "expected a success reply, got {reply:?}");
+
+    let mut banner = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut banner))
+        .await
+        .expect("the far end answered in time")
+        .expect("reads the banner");
+    assert_eq!(
+        &banner, b"SSH-",
+        "expected the test server's banner through the proxy, got {banner:?}"
+    );
+
+    connection.disconnect().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_socks_client_asking_for_bind_is_told_the_command_is_unsupported() {
+    // A refusal the client can report. Closing the socket instead would leave it saying "the proxy
+    // failed" for something that is simply not implemented.
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let server = server_or_skip!();
+    let connection = connect_to(&server).await;
+
+    let proxy = connection
+        .open_dynamic_forward("127.0.0.1", 0)
+        .await
+        .expect("opens a dynamic forward");
+
+    let mut socket = tokio::net::TcpStream::connect(proxy.local_addr())
+        .await
+        .expect("connects to the proxy");
+    socks_greet(&mut socket).await;
+
+    // 0x02 is BIND.
+    socket
+        .write_all(&[0x05, 0x02, 0x00, 0x01, 127, 0, 0, 1, 0, 80])
+        .await
+        .expect("sends a BIND request");
+
+    let mut reply = [0u8; 10];
+    tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut reply))
+        .await
+        .expect("the proxy answered in time")
+        .expect("reads the reply");
+
+    assert_eq!(reply[0], 0x05);
+    assert_eq!(reply[1], 0x07, "expected 'command not supported'");
+
+    connection.disconnect().await;
+}
