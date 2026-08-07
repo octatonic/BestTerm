@@ -327,7 +327,9 @@ mod tests {
     async fn an_unknown_address_type_is_refused() {
         let mut input = greeting();
         input.extend_from_slice(&[0x05, 0x01, 0x00, 0x09]);
-        let error = handshake(&mut Fake::new(input)).await.expect_err("bad atyp");
+        let error = handshake(&mut Fake::new(input))
+            .await
+            .expect_err("bad atyp");
         assert!(matches!(error, SocksError::AddressType(9)));
         assert_eq!(error.reply(), Some(Reply::AddressNotSupported));
     }
@@ -352,7 +354,9 @@ mod tests {
         let mut input = greeting();
         input.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, 2, 0xFF, 0xFE]);
         input.extend_from_slice(&80u16.to_be_bytes());
-        let error = handshake(&mut Fake::new(input)).await.expect_err("bad name");
+        let error = handshake(&mut Fake::new(input))
+            .await
+            .expect_err("bad name");
         assert!(matches!(error, SocksError::HostNotUtf8));
     }
 
