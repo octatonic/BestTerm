@@ -20,6 +20,7 @@ bestterm-config = { path = "crates/config", version = "0.1.0" }
 bestterm-core-vault = { path = "crates/core-vault", version = "0.1.0" }
 bestterm-importers = { path = "crates/importers", version = "0.1.0" }
 bestterm-proto-ssh = { path = "crates/proto-ssh", version = "0.1.0" }
+bestterm-ipc-frame = { path = "crates/ipc-frame", version = "0.1.0" }
 bestterm-core-pty = { path = "crates/core-pty", version = "0.1.0" }
 bestterm-core-terminal = { path = "crates/core-terminal", version = "0.1.0" }
 bestterm-term-render = { path = "crates/term-render", version = "0.1.0" }
@@ -86,6 +87,12 @@ base64 = "0.23"
 hmac = "0.13"
 sha1 = "0.11"
 sha2 = "0.11"
+
+# ---- graphical protocols ----------------------------------------------------
+# MIT OR Apache-2.0. Frames reach the main process through a memory mapping
+# rather than a pipe: see crates/ipc-frame/src/shared.rs for the arithmetic that
+# makes copying eight megabytes thirty times a second the wrong default.
+memmap2 = "0.9"
 
 # Test-only. Configuration tests must never touch a developer's real files.
 tempfile = "3"

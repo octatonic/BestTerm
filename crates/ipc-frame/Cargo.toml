@@ -1,0 +1,22 @@
+[package]
+name = "bestterm-ipc-frame"
+description = "Shared-memory frames and the control protocol between BestTerm and its graphical helper processes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bestterm-core-vault.workspace = true
+bestterm-surface.workspace = true
+memmap2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The mapping tests need somewhere to put a file that is not a real framebuffer.
+tempfile.workspace = true
