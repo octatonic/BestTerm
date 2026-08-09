@@ -33,6 +33,17 @@ pub enum CodecError {
     #[error("a text field was not valid UTF-8")]
     NotUtf8,
 
+    /// The message held more than its own fields account for.
+    ///
+    /// Refused rather than ignored. Bytes nobody read mean the sender wrote a field this build does
+    /// not know about, which is a version skew — and one that would otherwise pass silently while
+    /// the two sides quietly disagreed about what was said.
+    #[error("{count} byte(s) were left over after the message")]
+    TrailingBytes {
+        /// How many bytes were not accounted for.
+        count: usize,
+    },
+
     /// A length field described more data than a message may contain.
     ///
     /// Checked rather than trusted: the sender is another process, and a corrupted or hostile length
@@ -129,6 +140,17 @@ impl<'a> Decoder<'a> {
     /// How much is left unread.
     pub(crate) fn remaining(&self) -> usize {
         self.bytes.len()
+    }
+
+    /// Refuse a message that had bytes left over.
+    ///
+    /// Called once every message has been read. See [`CodecError::TrailingBytes`] for why leftovers
+    /// are a failure rather than something to skip past.
+    pub(crate) fn finish(&self) -> CodecResult<()> {
+        match self.remaining() {
+            0 => Ok(()),
+            count => Err(CodecError::TrailingBytes { count }),
+        }
     }
 
     /// Take `count` bytes.

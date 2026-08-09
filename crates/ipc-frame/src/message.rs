@@ -185,23 +185,31 @@ impl HostMessage {
     }
 
     /// Read a message from the bytes [`HostMessage::encode`] produced.
+    ///
+    /// Every byte has to be accounted for; see [`CodecError::TrailingBytes`].
     pub fn decode(bytes: &[u8]) -> CodecResult<Self> {
         let mut d = Decoder::new(bytes);
+        let message = Self::read(&mut d)?;
+        d.finish()?;
+        Ok(message)
+    }
+
+    fn read(d: &mut Decoder<'_>) -> CodecResult<Self> {
         let tag = d.u8()?;
         match tag {
             HOST_CONNECT => Ok(Self::Connect(Box::new(ConnectRequest {
                 host: d.string()?,
                 port: d.u16()?,
                 username: d.string()?,
-                domain: take_option_str(&mut d)?,
+                domain: take_option_str(d)?,
                 password: Secret::new(d.string()?),
-                desktop_size: take_size(&mut d)?,
+                desktop_size: take_size(d)?,
                 enable_credssp: d.bool()?,
                 keyboard_layout: d.u32()?,
                 client_name: d.string()?,
             }))),
-            HOST_INPUT => Ok(Self::Input(take_input(&mut d)?)),
-            HOST_RESIZE => Ok(Self::Resize(take_size(&mut d)?)),
+            HOST_INPUT => Ok(Self::Input(take_input(d)?)),
+            HOST_RESIZE => Ok(Self::Resize(take_size(d)?)),
             HOST_SHUTDOWN => Ok(Self::Shutdown),
             tag => Err(CodecError::UnknownTag {
                 what: "host message",
@@ -267,8 +275,16 @@ impl HelperMessage {
     }
 
     /// Read a message from the bytes [`HelperMessage::encode`] produced.
+    ///
+    /// Every byte has to be accounted for; see [`CodecError::TrailingBytes`].
     pub fn decode(bytes: &[u8]) -> CodecResult<Self> {
         let mut d = Decoder::new(bytes);
+        let message = Self::read(&mut d)?;
+        d.finish()?;
+        Ok(message)
+    }
+
+    fn read(d: &mut Decoder<'_>) -> CodecResult<Self> {
         let tag = d.u8()?;
         match tag {
             HELPER_READY => Ok(Self::Ready {
@@ -279,9 +295,9 @@ impl HelperMessage {
             }),
             HELPER_FRAME => {
                 let generation = d.u64()?;
-                let size = take_size(&mut d)?;
+                let size = take_size(d)?;
                 let stride = d.u32()?;
-                let format = take_format(&mut d)?;
+                let format = take_format(d)?;
                 let count = d.len()?;
                 let mut damage = Vec::new();
                 // Reserved only after each rectangle is read: `count` came from another process, and
@@ -302,11 +318,11 @@ impl HelperMessage {
                     damage,
                 }))
             }
-            HELPER_RESIZED => Ok(Self::Resized(take_size(&mut d)?)),
-            HELPER_CURSOR => Ok(Self::Cursor(take_cursor(&mut d)?)),
+            HELPER_RESIZED => Ok(Self::Resized(take_size(d)?)),
+            HELPER_CURSOR => Ok(Self::Cursor(take_cursor(d)?)),
             HELPER_CLIPBOARD => Ok(Self::ClipboardOffer(d.string()?)),
             HELPER_CLOSED => Ok(Self::Closed {
-                reason: take_option_str(&mut d)?,
+                reason: take_option_str(d)?,
             }),
             HELPER_ERROR => Ok(Self::Error(d.string()?)),
             tag => Err(CodecError::UnknownTag {
@@ -733,6 +749,22 @@ mod tests {
 
         let error = HelperMessage::decode(&[201]).expect_err("tag 201 is not defined");
         assert!(matches!(error, CodecError::UnknownTag { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn a_message_with_bytes_nobody_read_is_refused() {
+        // A field this build does not know about. Skipping past it would let the two sides carry on
+        // while quietly disagreeing about what was said, which is worse than stopping.
+        let mut encoded = HostMessage::Shutdown.encode();
+        encoded.push(0);
+
+        let error = HostMessage::decode(&encoded).expect_err("one byte too many");
+        assert_eq!(error, CodecError::TrailingBytes { count: 1 });
+
+        let mut encoded = HelperMessage::Cursor(CursorShape::Wait).encode();
+        encoded.extend_from_slice(&[1, 2, 3]);
+        let error = HelperMessage::decode(&encoded).expect_err("three too many");
+        assert_eq!(error, CodecError::TrailingBytes { count: 3 });
     }
 
     #[test]
