@@ -168,7 +168,9 @@ impl SharedFrames {
     /// generation certain the pixels behind it are finished.
     pub fn write(&mut self, generation: u64, fill: impl FnOnce(&mut [u8])) -> io::Result<()> {
         if generation == 0 {
-            return Err(invalid("generation 0 means 'nothing yet' and cannot be written"));
+            return Err(invalid(
+                "generation 0 means 'nothing yet' and cannot be written",
+            ));
         }
         let range = self.slot_range(generation)?;
         fill(&mut self.bytes_mut()[range]);
@@ -269,7 +271,9 @@ fn copy_is_intact(started: u64, now: u64, slot_count: u32) -> bool {
 /// Total bytes a mapping with these dimensions needs.
 fn total_bytes(slot_count: u32, slot_bytes: u64) -> io::Result<u64> {
     if slot_count < 2 {
-        return Err(invalid("a mapping needs at least two slots to be read while written"));
+        return Err(invalid(
+            "a mapping needs at least two slots to be read while written",
+        ));
     }
     u64::from(slot_count)
         .checked_mul(slot_bytes)
@@ -407,12 +411,21 @@ mod tests {
         // race that a test cannot schedule. With three slots the writer is back in the slot that
         // generation g occupies once it has published g + 2.
         assert!(copy_is_intact(5, 5, 3), "no new frame at all");
-        assert!(copy_is_intact(5, 6, 3), "one frame ahead is a different slot");
+        assert!(
+            copy_is_intact(5, 6, 3),
+            "one frame ahead is a different slot"
+        );
         assert!(!copy_is_intact(5, 7, 3), "two ahead is this very slot");
-        assert!(!copy_is_intact(5, 500, 3), "far ahead is certainly not intact");
+        assert!(
+            !copy_is_intact(5, 500, 3),
+            "far ahead is certainly not intact"
+        );
 
         // A counter that appears to go backwards must not read as a huge gap.
-        assert!(copy_is_intact(9, 1, 3), "a backwards counter is not a lapping");
+        assert!(
+            copy_is_intact(9, 1, 3),
+            "a backwards counter is not a lapping"
+        );
     }
 
     #[test]
@@ -538,7 +551,10 @@ mod tests {
     #[test]
     fn an_impossible_mapping_is_refused_before_it_is_attempted() {
         assert!(total_bytes(SLOT_COUNT, u64::MAX).is_err());
-        assert!(total_bytes(1, 1024).is_err(), "one slot cannot be read while written");
+        assert!(
+            total_bytes(1, 1024).is_err(),
+            "one slot cannot be read while written"
+        );
         assert!(total_bytes(0, 1024).is_err());
     }
 }
