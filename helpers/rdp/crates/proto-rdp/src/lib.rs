@@ -4,6 +4,11 @@
 //! process rather than the application, so a decoder that falls over takes down one tab instead of
 //! everything — see `crates/ipc-frame` for the boundary it speaks across.
 //!
+//! It also lives in a *cargo workspace* of its own, which is more surprising and has a duller reason:
+//! `ironrdp-connector` and `russh` require versions of `ecdsa` that cannot coexist in one dependency
+//! graph. `helpers/rdp/Cargo.toml` has the details. The practical consequence is that every cargo
+//! command has to name this workspace explicitly — `--manifest-path helpers/rdp/Cargo.toml`.
+//!
 //! Being built outwards from the parts that can be checked without a screen to look at:
 //!
 //! * [`config`] turns a session's settings into what IronRDP's connector wants. Thirty fields, no

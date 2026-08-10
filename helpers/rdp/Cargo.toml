@@ -1,0 +1,79 @@
+# A workspace of its own, and not by preference.
+#
+# `ironrdp-connector` pins `picky = "=7.0.0-rc.25"`, which pins
+# `ecdsa = "=0.17.0-rc.22"`. `russh` requires `ecdsa = "^0.17"`, and a caret
+# requirement does not match a pre-release. Both land in the same semver
+# compatibility range, so one dependency graph has to choose one of them — which
+# means SSH and RDP cannot live in the same graph until IronRDP unpins picky.
+#
+# Splitting them is not a workaround so much as the existing boundary applied one
+# level down. The RDP code already runs in a process of its own, for crash
+# isolation and an independent release cycle (docs/ARCHITECTURE.md). Giving that
+# process its own dependency graph follows from the same decision, and it means a
+# release-candidate pin deep inside one protocol cannot hold the other hostage.
+#
+# The shared crates — ipc-frame, surface, core-vault — are referenced by path and
+# compiled twice, once per workspace. None of them depends on russh or picky, so
+# there is nothing for them to conflict over. The cost is build time, which is
+# worth less than either protocol waiting on the other.
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/octatonic/BestTerm"
+homepage = "https://github.com/octatonic/BestTerm"
+authors = ["BestTerm contributors"]
+
+[workspace.dependencies]
+# ---- shared with the main workspace, by path ------------------------------------
+# No version key: these are never published from here, and a version requirement
+# would have to be kept in step with the main workspace by hand.
+bestterm-ipc-frame = { path = "../../crates/ipc-frame" }
+bestterm-surface = { path = "../../crates/surface" }
+bestterm-core-vault = { path = "../../crates/core-vault" }
+
+# ---- IronRDP -------------------------------------------------------------------
+# MIT OR Apache-2.0, from Devolutions. Chosen over FreeRDP bindings because it is
+# pure Rust and builds on both targets without a C toolchain.
+#
+# The individual crates rather than the `ironrdp` facade: the facade does not cover
+# the tokio and TLS adapters, so half the tree would come in through it and half
+# around it. `ironrdp-connector` 0.10 pins `ironrdp-pdu` 0.9, which is why these
+# two versions go together.
+ironrdp-connector = "0.10"
+ironrdp-pdu = { version = "0.9", features = ["std"] }
+
+# ---- foundations ---------------------------------------------------------------
+# Kept at the same versions as the main workspace. They are separate graphs, but a
+# type that crosses the process boundary is described by the same code on both
+# sides, so the crates behind it should not drift.
+thiserror = "2.0"
+tokio = { version = "1.53", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "macros",
+] }
+tracing = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

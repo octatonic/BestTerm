@@ -1,5 +1,8 @@
 # Rust
 /target/
+# The RDP helper is a workspace of its own (helpers/rdp/Cargo.toml) with its own
+# build directory.
+/helpers/rdp/target/
 **/*.rs.bk
 *.pdb
 

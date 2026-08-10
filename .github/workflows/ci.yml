@@ -53,8 +53,19 @@ jobs:
       - name: Formatting
         run: cargo fmt --all -- --check
 
+      # The RDP helper is a separate workspace, so every cargo command has to be run
+      # twice: `--workspace` stops at the workspace it is in. See helpers/rdp/Cargo.toml
+      # for why the split exists.
+      - name: Formatting (RDP helper)
+        run: cargo fmt --all --manifest-path helpers/rdp/Cargo.toml -- --check
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Clippy (RDP helper)
+        run: >-
+          cargo clippy --manifest-path helpers/rdp/Cargo.toml
+          --workspace --all-targets -- -D warnings
 
       # A real sshd, so the SSH client is tested against a server rather than against
       # our own idea of one. Runs only on Linux; the Windows job still compiles and
@@ -118,8 +129,14 @@ jobs:
       - name: Tests
         run: cargo test --workspace --all-targets
 
+      - name: Tests (RDP helper)
+        run: cargo test --manifest-path helpers/rdp/Cargo.toml --workspace --all-targets
+
       - name: Build (release)
         run: cargo build --workspace --release
+
+      - name: Build (release, RDP helper)
+        run: cargo build --manifest-path helpers/rdp/Cargo.toml --workspace --release
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -142,6 +159,14 @@ jobs:
         with:
           command: check
           arguments: --all-features
+      # The helper's graph is its own, so its licences are unchecked unless checked
+      # separately. One shared deny.toml, because the rules are the project's and not
+      # the workspace's — a GPL-2.0-only dependency is just as unacceptable here.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          manifest-path: ./helpers/rdp/Cargo.toml
+          arguments: --all-features --config ./deny.toml
 
   # Documentation must stay buildable: the trait crates are the contract between
   # layers, and their docs are how that contract is communicated.
@@ -162,5 +187,8 @@ jobs:
         with:
           key: docs
       - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo doc --manifest-path helpers/rdp/Cargo.toml --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
