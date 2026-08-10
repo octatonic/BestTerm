@@ -1,6 +1,8 @@
 # Pinned once the first green CI run establishes a known-good stable version.
 # Until then `stable` avoids pinning the whole team to a version nobody has verified.
-# alacritty_terminal 0.26 requires rust-version >= 1.85 (edition 2024).
+# The workspaces declare rust-version 1.95, which is what egui 0.36 requires.
+# See the note beside it: understating that number makes cargo prefer older,
+# occasionally vulnerable, dependency versions.
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]

@@ -15,6 +15,7 @@ workspace = true
 bestterm-ipc-frame.workspace = true
 ironrdp-connector.workspace = true
 ironrdp-pdu.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

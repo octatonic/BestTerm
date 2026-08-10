@@ -24,7 +24,16 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# The floor the dependency tree actually imposes, not an aspiration. egui 0.36
+# requires 1.95, so nothing older can build this at all.
+#
+# Understating it is not harmless: cargo resolves to the newest versions its
+# MSRV allows, so a low number here makes it choose *older* dependencies. That is
+# how `time` was being pinned to 0.3.45 -- every release carrying the fix for
+# RUSTSEC-2026-0009 declares 1.88, so a claimed MSRV of 1.85 selected the
+# vulnerable one on purpose. An MSRV is a promise about what builds; a wrong one
+# is a promise about which security fixes are skipped.
+rust-version = "1.95"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/octatonic/BestTerm"
 homepage = "https://github.com/octatonic/BestTerm"
@@ -54,6 +63,9 @@ ironrdp-pdu = { version = "0.9", features = ["std"] }
 # Kept at the same versions as the main workspace. They are separate graphs, but a
 # type that crosses the process boundary is described by the same code on both
 # sides, so the crates behind it should not drift.
+# SHA-256, for pinning a server's public key. Same crate and version as the main
+# workspace uses for SSH host key fingerprints.
+sha2 = "0.11"
 thiserror = "2.0"
 tokio = { version = "1.53", features = [
     "rt-multi-thread",

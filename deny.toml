@@ -85,6 +85,26 @@ ignore = [
     # Revisit when the `rsa` crate ships the constant-time implementation, or if
     # russh gains a way to keep RSA verification without RSA signing.
     { id = "RUSTSEC-2023-0071", reason = "no fixed version exists; disabling RSA would drop host key verification for older servers" },
+
+    # RUSTSEC-2023-0089 — `atomic-polyfill` is unmaintained; its author archived the
+    # repository and points at `portable-atomic`. The advisory itself says "no safe
+    # upgrade is available". Reached only in the RDP helper's graph, four levels down:
+    #
+    #   ironrdp-connector -> sspi -> winscard -> iso7816 -> heapless 0.7 -> atomic-polyfill
+    #
+    # Accepted, because nothing here can be done about it:
+    #
+    # * There is no fixed version to move to, and no vulnerability — the advisory is
+    #   about maintenance status, not a defect.
+    # * The crate provides atomics on targets that lack them natively. On x86-64 and
+    #   aarch64, which is everything BestTerm builds for, it compiles to the platform's
+    #   own atomics.
+    # * It arrives through sspi's smart-card support, which `ironrdp-connector` depends
+    #   on unconditionally. BestTerm does not offer smart card logon, so none of that
+    #   code is reached at runtime either.
+    #
+    # Revisit when sspi moves to heapless 0.8 or later, which dropped the dependency.
+    { id = "RUSTSEC-2023-0089", reason = "unmaintained with no upgrade available; reached only through sspi's unused smart card support" },
 ]
 
 [sources]
