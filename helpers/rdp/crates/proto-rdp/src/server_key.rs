@@ -544,7 +544,10 @@ mod tests {
     fn an_empty_store_is_empty() {
         let store = KnownServers::parse("# nothing here\n\n");
         assert!(store.is_empty());
-        assert_eq!(store.verify("rdp.int", 3389, fingerprint(1)), Verdict::Unknown);
+        assert_eq!(
+            store.verify("rdp.int", 3389, fingerprint(1)),
+            Verdict::Unknown
+        );
     }
 
     #[test]
@@ -575,8 +578,7 @@ mod tests {
             "{REVOKED} {}\n",
             KnownServers::line_for("rdp.int", 3389, fingerprint(7))
         );
-        let checker =
-            ServerKeyChecker::new(KnownServers::parse(&text), AcceptAnyVerifierForTests);
+        let checker = ServerKeyChecker::new(KnownServers::parse(&text), AcceptAnyVerifierForTests);
         let outcome = checker.check("rdp.int", 3389, &spki(7));
 
         assert_eq!(outcome.verdict, Verdict::Revoked);
@@ -596,8 +598,7 @@ mod tests {
 
     #[test]
     fn accepting_a_new_key_asks_the_caller_to_store_it() {
-        let checker =
-            ServerKeyChecker::new(KnownServers::default(), AcceptAnyVerifierForTests);
+        let checker = ServerKeyChecker::new(KnownServers::default(), AcceptAnyVerifierForTests);
         let outcome = checker.check("rdp.int", 3389, &spki(5));
 
         assert!(outcome.allows_connection());
@@ -641,7 +642,8 @@ mod tests {
             }
         }
 
-        let checker = ServerKeyChecker::new(store_with("rdp.int", 3389, 7), Capture(Mutex::new(None)));
+        let checker =
+            ServerKeyChecker::new(store_with("rdp.int", 3389, 7), Capture(Mutex::new(None)));
         let outcome = checker.check("rdp.int", 3389, &spki(8));
 
         match outcome.verdict {
