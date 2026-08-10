@@ -223,16 +223,16 @@ fn paint_cursor(
         CursorKind::Block => {
             painter.rect_filled(cell, SQUARE, ink);
             // Redraw the covered character in the background colour so it stays legible.
-            if let Some(under) = snapshot.cell(cursor.col, cursor.row) {
-                if under.has_glyph() {
-                    painter.text(
-                        origin,
-                        Align2::LEFT_TOP,
-                        under.ch,
-                        style.font.clone(),
-                        color(under.bg),
-                    );
-                }
+            if let Some(under) = snapshot.cell(cursor.col, cursor.row)
+                && under.has_glyph()
+            {
+                painter.text(
+                    origin,
+                    Align2::LEFT_TOP,
+                    under.ch,
+                    style.font.clone(),
+                    color(under.bg),
+                );
             }
         }
         CursorKind::HollowBlock => {

@@ -196,10 +196,10 @@ fn to_pty_size(size: GridSize) -> PtySize {
 /// `HOME` on unix, `USERPROFILE` on Windows.
 fn default_cwd() -> Option<PathBuf> {
     for key in ["HOME", "USERPROFILE"] {
-        if let Some(value) = std::env::var_os(key) {
-            if !value.is_empty() {
-                return Some(PathBuf::from(value));
-            }
+        if let Some(value) = std::env::var_os(key)
+            && !value.is_empty()
+        {
+            return Some(PathBuf::from(value));
         }
     }
     None

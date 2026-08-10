@@ -151,10 +151,10 @@ pub fn parse(bytes: &[u8]) -> Import {
             }
             // Folder icon. Recorded on the folder if one exists.
             "ImgNum" => {
-                if let Some(id) = current_folder {
-                    if let Some(node) = import.tree.get_mut(id) {
-                        node.icon = moba_icon(value);
-                    }
+                if let Some(id) = current_folder
+                    && let Some(node) = import.tree.get_mut(id)
+                {
+                    node.icon = moba_icon(value);
                 }
             }
             _ => {

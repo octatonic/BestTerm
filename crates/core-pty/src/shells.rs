@@ -302,16 +302,17 @@ fn platform_discover() -> Vec<ShellProfile> {
     };
 
     // $SHELL is the user's stated preference and therefore the default.
-    if let Ok(shell) = std::env::var("SHELL") {
-        if !shell.is_empty() && is_file(Path::new(&shell)) {
-            let kind = ShellKind::from_program(&shell);
-            let name = Path::new(&shell)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("shell")
-                .to_string();
-            push(shell, kind, Some(format!("{name} (default)")));
-        }
+    if let Ok(shell) = std::env::var("SHELL")
+        && !shell.is_empty()
+        && is_file(Path::new(&shell))
+    {
+        let kind = ShellKind::from_program(&shell);
+        let name = Path::new(&shell)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("shell")
+            .to_string();
+        push(shell, kind, Some(format!("{name} (default)")));
     }
 
     for candidate in [

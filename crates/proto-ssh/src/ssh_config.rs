@@ -168,15 +168,15 @@ impl JumpHop {
         };
 
         // Bracketed IPv6, `[::1]:2222`.
-        if let Some(inner) = rest.strip_prefix('[') {
-            if let Some((address, tail)) = inner.split_once(']') {
-                let port = tail.strip_prefix(':').and_then(|p| p.parse().ok());
-                return Self {
-                    host: address.to_string(),
-                    user,
-                    port,
-                };
-            }
+        if let Some(inner) = rest.strip_prefix('[')
+            && let Some((address, tail)) = inner.split_once(']')
+        {
+            let port = tail.strip_prefix(':').and_then(|p| p.parse().ok());
+            return Self {
+                host: address.to_string(),
+                user,
+                port,
+            };
         }
 
         // A bare IPv6 address contains colons that are not a port separator.

@@ -127,10 +127,8 @@ pub fn build_text_runs(cells: &[RenderCell]) -> Vec<TextRun> {
         expected_col = col + advance;
 
         // A wide glyph terminates its run: see the note above about column drift.
-        if wide {
-            if let Some(run) = current.take() {
-                runs.push(run);
-            }
+        if wide && let Some(run) = current.take() {
+            runs.push(run);
         }
     }
 
