@@ -1,0 +1,23 @@
+[package]
+name = "bestterm-proto-rdp"
+description = "RDP for BestTerm, on IronRDP: runs inside the bestterm-rdp helper process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bestterm-ipc-frame.workspace = true
+ironrdp-connector.workspace = true
+ironrdp-pdu.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Only the tests build a request from scratch; the crate itself receives one already assembled.
+bestterm-core-vault.workspace = true
+bestterm-surface.workspace = true

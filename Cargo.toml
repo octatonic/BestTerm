@@ -21,6 +21,7 @@ bestterm-core-vault = { path = "crates/core-vault", version = "0.1.0" }
 bestterm-importers = { path = "crates/importers", version = "0.1.0" }
 bestterm-proto-ssh = { path = "crates/proto-ssh", version = "0.1.0" }
 bestterm-ipc-frame = { path = "crates/ipc-frame", version = "0.1.0" }
+bestterm-proto-rdp = { path = "crates/proto-rdp", version = "0.1.0" }
 bestterm-core-pty = { path = "crates/core-pty", version = "0.1.0" }
 bestterm-core-terminal = { path = "crates/core-terminal", version = "0.1.0" }
 bestterm-term-render = { path = "crates/term-render", version = "0.1.0" }
@@ -93,6 +94,18 @@ sha2 = "0.11"
 # rather than a pipe: see crates/ipc-frame/src/shared.rs for the arithmetic that
 # makes copying eight megabytes thirty times a second the wrong default.
 memmap2 = "0.9"
+
+# IronRDP, MIT OR Apache-2.0, from Devolutions. Chosen over FreeRDP bindings
+# because it is pure Rust and builds on both targets without a C toolchain; the
+# helper-process architecture leaves room to swap in FreeRDP later if IronRDP
+# turns out not to cover multi-monitor or device redirection.
+#
+# The individual crates rather than the `ironrdp` facade: the facade does not
+# cover the tokio and TLS adapters, so half the tree would come in through it and
+# half around it. `ironrdp-connector` 0.10 pins `ironrdp-pdu` 0.9, which is why
+# these two versions go together.
+ironrdp-connector = "0.10"
+ironrdp-pdu = { version = "0.9", features = ["std"] }
 
 # Test-only. Configuration tests must never touch a developer's real files.
 tempfile = "3"
