@@ -12,6 +12,11 @@ all-features = true
 
 [licenses]
 version = 2
+# One file governs two dependency graphs -- the application's and the RDP helper's
+# (see helpers/rdp/Cargo.toml for why they are separate). An allowance that is
+# unused in one of them is almost always in use in the other, so "this allowance
+# was not needed" stopped carrying information and is no longer reported.
+unused-allowed-license = "allow"
 # Permissive and GPLv3-compatible licences only. Anything not on this list must
 # be justified in a PR and added deliberately.
 allow = [

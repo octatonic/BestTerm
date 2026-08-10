@@ -32,11 +32,12 @@ authors = ["BestTerm contributors"]
 
 [workspace.dependencies]
 # ---- shared with the main workspace, by path ------------------------------------
-# No version key: these are never published from here, and a version requirement
-# would have to be kept in step with the main workspace by hand.
-bestterm-ipc-frame = { path = "../../crates/ipc-frame" }
-bestterm-surface = { path = "../../crates/surface" }
-bestterm-core-vault = { path = "../../crates/core-vault" }
+# The version is carried alongside the path even though resolution never uses it:
+# a path dependency without one reads as a wildcard requirement, which `deny.toml`
+# refuses on purpose. It has to be kept in step with the main workspace by hand.
+bestterm-ipc-frame = { path = "../../crates/ipc-frame", version = "0.1.0" }
+bestterm-surface = { path = "../../crates/surface", version = "0.1.0" }
+bestterm-core-vault = { path = "../../crates/core-vault", version = "0.1.0" }
 
 # ---- IronRDP -------------------------------------------------------------------
 # MIT OR Apache-2.0, from Devolutions. Chosen over FreeRDP bindings because it is
