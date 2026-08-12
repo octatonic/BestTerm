@@ -6,8 +6,11 @@
 **/*.rs.bk
 *.pdb
 
-# Cargo.lock IS committed: this workspace produces binaries, not a library.
-# (see https://doc.rust-lang.org/cargo/faq.html#why-do-binaries-have-cargolock-in-version-control-but-not-libraries)
+# Cargo.lock IS committed, for both workspaces: they produce binaries, not
+# libraries (see
+# https://doc.rust-lang.org/cargo/faq.html#why-do-binaries-have-cargolock-in-version-control-but-not-libraries).
+# It also stops CI re-resolving the graph on every run, which is how a `time`
+# with an unfixed advisory got selected once.
 
 # Build / packaging output
 /dist/

@@ -115,6 +115,11 @@ The split is the boundary above applied one level down, and it costs two things 
 
 VNC does not need the same treatment unless its backend brings a conflicting dependency of its own.
 
+The split has an expiry date, and it is visible upstream: `picky` 7.0.0-rc.26 dropped its `ecdsa`
+dependency entirely. The moment an `ironrdp-connector` release pins that or later, the conflict is
+gone and the two workspaces can be merged back into one. Worth re-checking whenever IronRDP
+publishes — `helpers/rdp` is a workaround with a known end, not a permanent boundary.
+
 ### Trust decisions are duplicated on purpose, for now
 
 `proto-ssh::known_hosts` and `proto-rdp::server_key` have the same shape — the same four verdicts, the
