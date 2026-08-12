@@ -58,6 +58,15 @@ bestterm-core-vault = { path = "../../crates/core-vault", version = "0.1.0" }
 # two versions go together.
 ironrdp-connector = "0.10"
 ironrdp-pdu = { version = "0.9", features = ["std"] }
+# The tokio adapter without its `reqwest` feature: that feature exists only for
+# the Kerberos network client, and pulling an HTTP stack in for a feature this
+# build refuses would be a strange trade. See session.rs.
+ironrdp-tokio = "0.10"
+# rustls with aws-lc-rs, which is already in the application's graph by way of
+# russh, so the two workspaces agree on their TLS implementation. Note that this
+# crate upgrades *without* verifying the certificate; crates/proto-rdp/src/server_key.rs
+# explains why that is correct for RDP and what replaces it.
+ironrdp-tls = { version = "0.2", features = ["rustls-aws-lc-rs"] }
 
 # ---- foundations ---------------------------------------------------------------
 # Kept at the same versions as the main workspace. They are separate graphs, but a

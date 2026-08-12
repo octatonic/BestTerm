@@ -15,8 +15,12 @@ workspace = true
 bestterm-ipc-frame.workspace = true
 ironrdp-connector.workspace = true
 ironrdp-pdu.workspace = true
+ironrdp-tls.workspace = true
+ironrdp-tokio.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 # Only the tests build a request from scratch; the crate itself receives one already assembled.

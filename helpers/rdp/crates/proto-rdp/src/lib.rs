@@ -17,13 +17,17 @@
 //!   time. `ironrdp-tls` accepts any certificate — deliberately, because RDP servers are self-signed
 //!   and CredSSP is what actually binds the server's key — so noticing that the key changed is left
 //!   to somebody, and that somebody is this.
+//! * [`session`] opens a connection: TCP, then the security negotiation, then TLS, then the server
+//!   key check, then everything else inside TLS.
 //!
-//! The handshake, the active stage and input follow. RDP is the one protocol here whose correctness
-//! is only fully visible on a display, so the parts that *can* be pinned down by a test are being
-//! pinned down first.
+//! The active stage and input follow. RDP is the one protocol here whose correctness is only fully
+//! visible on a display, so the parts that *can* be pinned down by a test are being pinned down
+//! first.
 
 pub mod config;
 pub mod server_key;
+pub mod session;
 
 pub use config::{ConfigError, MAX_DIMENSION, MIN_DIMENSION};
 pub use server_key::{KeyFingerprint, KnownServers, ServerKeyChecker, Verdict};
+pub use session::{Connected, RdpError, connect};
