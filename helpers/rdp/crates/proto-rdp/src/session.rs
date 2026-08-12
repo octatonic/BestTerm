@@ -161,7 +161,10 @@ impl std::fmt::Debug for Connected {
 struct NoKerberos;
 
 impl NetworkClient for NoKerberos {
-    async fn send(&mut self, request: &sspi::generator::NetworkRequest) -> ConnectorResult<Vec<u8>> {
+    async fn send(
+        &mut self,
+        request: &sspi::generator::NetworkRequest,
+    ) -> ConnectorResult<Vec<u8>> {
         tracing::warn!(url = %request.url, "refused a Kerberos request: unsupported in this build");
         Err(ironrdp_connector::general_err!(
             "Kerberos is not supported by this build"
