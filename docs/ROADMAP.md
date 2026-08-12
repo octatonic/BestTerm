@@ -50,7 +50,7 @@ only declared once SFTP is in, with beta 0.9 shipping after phase 3 so there is 
 
 ## Phase 5 — the simple protocols
 
-Telnet, serial, rlogin, FTP, SPICE. Also the test of whether `Transport` leaks.
+Telnet, serial, rlogin, RSH, FTP, Mosh, SPICE. Also the test of whether `Transport` leaks.
 
 ## Phase 6 — X11
 
@@ -58,15 +58,47 @@ The SSH x11 channel, xauth and display allocation · orchestration of the runnin
 Linux · a bundled VcXsrv build on Windows with lifecycle management · XDMCP last. The most expensive
 phase in the plan; scoped as orchestration of an existing X server, never as writing one.
 
-## Phase 7 — power features
+## Phase 7 — the tool set
+
+The gap a re-reading of [`ui-parity.md`](ui-parity.md) exposed: every ribbon button there has either a
+phase against it or a written-down reason for being left out — except `Servers` and `Tools`, which had
+neither, and which in the original hide more functionality than any other two buttons. Recording them
+here so they are scheduled rather than discovered.
+
+Grouped by what people actually reach for, not by which menu they sit under:
+
+* **Needed for ordinary SSH use, and cheap.** An SSH key generator (people have to make keys
+  somehow); an SSH *agent* of our own, since phase 2 only consumes whatever agent the machine already
+  runs; a text editor, which is also what phase 4's remote file editing opens.
+* **Network utilities.** Port and network scanner, ping, traceroute, whois, DNS lookup, listening
+  ports, ARP table, Wake-on-LAN, serial port monitor.
+* **Local servers.** TFTP, NFS, FTP, SFTP/SSH, Telnet, HTTP, and scheduled jobs. NFS in particular
+  pairs with phase 6: it is half of how the original is used for Unix development from Windows.
+
+The first group is small enough to pull forward into phases 2 and 4; the other two are genuinely
+large. Sequencing is an open question, deliberately left open rather than guessed at.
+
+## Phase 8 — power features
 
 Multi-exec broadcast · macros · session logging and recording · tmux control mode · zmodem/trzsz ·
 command palette and history-based completion.
 
-## Phase 8 — extensibility → 2.0
+## Phase 9 — extensibility → 2.0
 
 `plugin-host` on `wasmtime` with a capability model, SDK and scaffolding · configuration sync over
 Git · team vaults.
+
+## Open questions
+
+* **The Browser session type.** MobaXterm can open a web browser as a session. Full parity therefore
+  means shipping a browser engine, which contradicts the decision to be native with no webview — the
+  only place where those two commitments actually collide. Deciding it means choosing which of the two
+  matters more; nothing else in the plan depends on the answer, so it can wait, but it cannot be
+  resolved by implementation cleverness.
+* **Portable mode.** Packaging produces a portable zip, but what people mean by portable is
+  configuration living beside the executable instead of in `AppData`. `crates/config` resolves paths
+  through `directories`; an override is a small change and an unmade decision.
+* **Sequencing of phase 7.** See the note there.
 
 ## Permanent non-goals
 

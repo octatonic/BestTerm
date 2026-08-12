@@ -98,6 +98,31 @@ through shared memory; input crosses through IPC. Three reasons, in order of imp
 
 This mirrors what `e-sh` does with its `e-sh-rdp` helper, which is prior art that this works.
 
+### A fourth reason arrived uninvited: separate dependency graphs
+
+The RDP helper lives in a cargo workspace of its own, at `helpers/rdp`. Not by preference —
+`ironrdp-connector` pins `picky = "=7.0.0-rc.25"`, which pins `ecdsa = "=0.17.0-rc.22"`, while `russh`
+requires `ecdsa = "^0.17"`, and a caret requirement does not match a pre-release. Both fall in the same
+semver compatibility range, so one graph must choose one of them, and no feature on either side removes
+the dependency. SSH and RDP therefore cannot share a dependency graph until IronRDP unpins picky.
+
+The split is the boundary above applied one level down, and it costs two things worth knowing:
+
+* Every cargo command has to name the workspace: `--manifest-path helpers/rdp/Cargo.toml`. CI runs
+  each of fmt, clippy, test, build, doc and cargo-deny twice for this reason.
+* `ipc-frame`, `surface` and `core-vault` are referenced by path and compiled twice. None of them
+  depends on russh or picky, so there is nothing to conflict over.
+
+VNC does not need the same treatment unless its backend brings a conflicting dependency of its own.
+
+### Trust decisions are duplicated on purpose, for now
+
+`proto-ssh::known_hosts` and `proto-rdp::server_key` have the same shape — the same four verdicts, the
+same decision type, the same "revoked is decided before anyone is asked" ordering — and share no code.
+The file formats have nothing in common (one is OpenSSH's, with globs and hashed hostnames), the two
+crates are in different workspaces, and two similar things are not yet a pattern. When VNC needs a
+third, the common part is worth extracting into a crate that depends on neither protocol.
+
 ## The terminal engine is behind a trait
 
 [`TerminalEmulator`](../crates/core-terminal/src/lib.rs) wraps `alacritty_terminal`. The wrapper is
@@ -165,3 +190,13 @@ Marked here so nobody mistakes them for finished design:
   tab bar, status bar — with placeholder actions. Pixel parity against
   [`ui-parity.md`](ui-parity.md) is phase 1.
 * No configuration persistence yet. Phase 1.
+* `Cargo.lock` is not committed, although `.gitignore` says it is. Nothing here can generate one
+  without a local cargo, so CI re-resolves the graph on every run. That is not merely untidy: it is
+  how a vulnerable `time` was selected once already, and it means a green run does not pin what a
+  later run will build. Committing both lockfiles is the first thing to do once a toolchain is
+  available locally.
+* `rust-version = "1.95"` is load-bearing, not decorative. cargo resolves to the newest versions the
+  declared MSRV permits, so understating it makes cargo prefer *older* dependencies — including ones
+  with unfixed advisories. The number must track what the tree actually requires.
+* The application has never been run. No window has ever opened, so chrome layout, font metrics,
+  rotated sidebar labels and input handling are unverified by anything but a compiler.

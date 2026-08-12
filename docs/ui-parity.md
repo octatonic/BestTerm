@@ -104,13 +104,13 @@ A single row of large buttons, each an icon above a text label.
 | Button | Action | Notes |
 |---|---|---|
 | Session | open the Session dialog | primary entry point |
-| Servers | server tools submenu | |
-| Tools | local tools submenu | |
+| Servers | server tools submenu | phase 7 |
+| Tools | local tools submenu | phase 7 |
 | Games | — | present in the original; BestTerm omits it deliberately, see note below |
 | Sessions | session list / switcher | |
 | View | layout controls | |
 | Split | pane splitting | |
-| MultiExec | broadcast input to panes | phase 7 |
+| MultiExec | broadcast input to panes | phase 8 |
 | Tunneling | tunnel manager | phase 2 |
 | Packages | package manager | out of scope, see ARCHITECTURE.md on not cloning Cygwin |
 | Settings | settings dialog | |
