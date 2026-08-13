@@ -369,6 +369,17 @@ pub fn quick_connect_field(ui: &mut Ui, state: &mut ChromeState, actions: &mut V
 ///
 /// The rotated labels are the layout's signature element, and the strip stays visible when the panel
 /// is collapsed — clicking the selected tab collapses, clicking another switches and expands.
+/// The always-visible strip of panel tabs along the left edge.
+///
+/// # This does not yet match the reference, on purpose
+///
+/// MobaXterm 26.4 puts three icon-only buttons here -- a star for Sessions, a folding knife for Tools,
+/// a paper plane for Sftp -- with no text and no Macros tab. The rotated text labels below are a
+/// faithful reproduction of an *older* release, which is what this project measured itself against
+/// before anyone had looked at 26.4. See `docs/ui-parity.md`.
+///
+/// They stay until the icon set exists. Three empty squares would be closer to the reference and
+/// impossible to use, and a wrong strip somebody can read beats a right one they cannot.
 pub fn sidebar_strip(
     ui: &mut Ui,
     theme: &ChromeTheme,

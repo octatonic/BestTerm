@@ -96,20 +96,54 @@ Three findings from the capture that contradict what this document assumed:
   full-width row of its own and a Go button beside it.
 * **The menu bar, ribbon and quick-connect row are one continuous fill** with no rules between them.
   Only the boundary with the content area is drawn, as a single grey hairline.
-* **The left edge strip is 35 px of icons, not rotated text.** This installation shows a star and two
-  arrows rather than the words `Sessions` / `Tools` / `Macros` / `Sftp`. Whether that is a 26.4 change
-  or a setting is `MEASURE` — it decides whether the rotated labels, described below as the most
-  distinctive element of the layout, are still part of the target at all.
+* **The left edge strip is icons, not rotated text — and there are three of them, not four.** Magnified,
+  the strip holds a gold star (Sessions), a red folding knife (Tools) and a blue paper plane (Sftp),
+  each in a square button, with no text anywhere. The active one is drawn without a border while the
+  others have one. `Macros`, which this project's strip has as a fourth tab, is not on the strip at all.
 
-Not measurable from this capture, and needing a second one at a non-maximised size:
+  This is the finding with the widest consequences, because the rotated labels were described here as
+  the most distinctive element of the whole layout and the thing imitators get wrong. They are not in
+  26.4. What this project reproduced faithfully was an **older** MobaXterm.
 
-* The status bar. A maximised window puts its last eight pixels past the bottom of the screen, which
-  is exactly where the status bar is, so nothing about its height or contents can be read from here.
-* Anything about resize behaviour, the collapsed sidebar, or the pin / unpin / auto-hide states.
+  The target is therefore the icon strip. It is not being changed yet, and deliberately: the icon set
+  does not exist, and replacing the only labels in the strip with three empty squares would trade a
+  wrong-but-usable strip for a right-but-unusable one. The rotated text stays as a stand-in until there
+  are icons to put in its place, and `crates/ui-chrome` says so where the strip is drawn.
 
-The theme in the captured installation is **dark**. This document and the implementation both assumed
-the light theme; which one is the default for a fresh install, and therefore which one parity is judged
-against, is `MEASURE`.
+### The second capture: windowed, 1400x900
+
+Taken to reach what a maximised window hides. It confirmed the bands above to the pixel — 30 px of title
+bar, then the same **99 px** of menu bar, ribbon and quick-connect row, then the same single grey
+hairline — which is worth more than it sounds: the two captures were measured independently and agree,
+so 99 px is a real figure and not an artefact of how one screenshot was taken.
+
+And it produced one finding that changes the implementation:
+
+* **There is no status bar.** The session tree runs to the bottom edge of the window, and below it is a
+  one-pixel border and nothing else. This project draws a status bar carrying the X server state, the
+  grid size and the session description.
+
+  The honest limit of this observation: it says *this installation* shows none. MobaXterm has had a
+  status bar historically and `View` almost certainly still has a toggle for it, so whether 26.4 removed
+  it or this configuration hid it is `MEASURE`, and the answer decides whether ours should be there at
+  all or merely be switchable off.
+
+Still not measured:
+
+* The items inside each of the eight menus. This needs the menus opened one at a time, which is the one
+  part of this that a person does far faster than a script: open each, read the items, paste them in.
+* Resize behaviour, the collapsed sidebar, and the pin / unpin / auto-hide states.
+* Behaviour at 150% and 200% display scaling.
+
+The theme in the captured installation is **dark**, and that is a setting rather than the default:
+`MobaXterm.ini` carries `DarknessIntensity=80` and `SkinSat=80`, which are the controls for it. Parity is
+therefore judged against the light chrome, which is what this project already implements, and dark
+becomes a theme to support rather than the target to match. The structure measured above is the same
+under either.
+
+One cross-check worth recording, because it is the only independent confirmation of any figure here:
+the same file carries `SidebarWidth=336`, and the colour scan measured 35 px of strip, a 1 px
+separator, 299 px of tree and another 1 px separator — 336 exactly.
 
 ## Element inventory
 
