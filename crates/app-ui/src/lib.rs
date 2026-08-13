@@ -12,7 +12,7 @@ use bestterm_term_render::{TerminalMetrics, TerminalStyle};
 use bestterm_transport::GridSize;
 use bestterm_ui_chrome::{
     ChromeAction, ChromeState, ChromeTheme, SidebarPanel, StatusInfo, TabInfo, apply_theme,
-    menu_bar, quick_connect_bar, ribbon, sidebar_strip, status_bar, tab_bar,
+    menu_bar, quick_connect_field, ribbon, sidebar_strip, status_bar, tab_bar,
 };
 use egui::{CentralPanel, CornerRadius, EventFilter, Frame, Panel, Sense, Stroke};
 
@@ -318,6 +318,9 @@ impl eframe::App for BestTermApp {
         // which would otherwise conflict with the two closures that need `&mut self`. The theme is
         // a handful of colours and floats; the clarity is worth more than the copy.
         let theme = self.theme.clone();
+        // Cloned for the same reason: the row below hands `&mut self.chrome` to the quick-connect
+        // field and a read-only view to the tab bar, in one closure.
+        let chrome = self.chrome.clone();
 
         // Panel order is layout order: first added is outermost. The central panel must be last.
         Panel::top("bestterm_menu_bar")
@@ -329,11 +332,17 @@ impl eframe::App for BestTermApp {
             .frame(chrome_frame(theme.chrome_bg))
             .show(ui, |ui| ribbon(ui, &theme, &mut actions));
 
-        Panel::top("bestterm_quick_connect")
+        // One row, full width, above the sidebar: the quick-connect field on the left and the tab
+        // bar immediately to its right. Measured from the reference, which does not give either of
+        // them a row of its own — see `docs/ui-parity.md`.
+        Panel::top("bestterm_connect_and_tabs")
             .exact_size(theme.quick_connect_height + 6.0)
             .frame(chrome_frame(theme.chrome_bg))
             .show(ui, |ui| {
-                quick_connect_bar(ui, &mut self.chrome, &mut actions)
+                ui.horizontal(|ui| {
+                    quick_connect_field(ui, &mut self.chrome, &mut actions);
+                    tab_bar(ui, &theme, &chrome, &mut actions);
+                });
             });
 
         Panel::bottom("bestterm_status_bar")
@@ -358,15 +367,7 @@ impl eframe::App for BestTermApp {
                 .show(ui, |ui| requested_shell = self.sidebar_contents(ui));
         }
 
-        CentralPanel::no_frame().show(ui, |ui| {
-            let chrome = self.chrome.clone();
-            Panel::top("bestterm_tab_bar")
-                .exact_size(theme.tab_bar_height)
-                .frame(chrome_frame(theme.chrome_bg))
-                .show(ui, |ui| tab_bar(ui, &theme, &chrome, &mut actions));
-
-            self.terminal_ui(ui);
-        });
+        CentralPanel::no_frame().show(ui, |ui| self.terminal_ui(ui));
 
         if let Some(index) = requested_shell {
             self.open_shell(index, &ctx);

@@ -42,85 +42,131 @@ gap is visible in code review rather than hidden.
 
 ## Window structure
 
+Measured from MobaXterm Professional 26.4.0.5512, maximised on a 3440x1440 display. The captured
+window is 3456x1408 because a maximised window overhangs the screen by the invisible 8-pixel resize
+border on every side, so every figure below has had that border removed.
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ title bar                                                                    │
+│ title bar                                                            23 px   │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ Terminal  Sessions  View  Split  MultiExec  Tunneling  Packages  Settings ...│  menu bar
+│ Terminal  Sessions  View  X server  Tools  Settings  Macros  Help            │  menu bar
 ├──────────────────────────────────────────────────────────────────────────────┤
-│  ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
-│  │icon│ │icon│ │icon│ │icon│ │icon│ │icon│ │icon│ │icon│ │icon│ │icon│  ...  │  ribbon
-│  │Sess│ │Serv│ │Tool│ │Game│ │Sess│ │View│ │Spli│ │Mult│ │Tunn│ │Pack│      │
-│  └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘      │
+│  ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐        X  ⏻ │
+│  │icon│ │icon│ │icon│ │icon│ │icon│ │icon│ │icon│ │icon│ │icon│  ...        │  ribbon
+│  │Sess│ │Serv│ │Tool│ │Sess│ │View│ │Spli│ │Mult│ │Tunn│ │Pack│    no labels │
+│  └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘             │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ Quick connect: [ user@host:port                                    ] [ Go ]  │
+│ [ Quick connect...        ] ╱🏠╲╱ + ╲                                        │  one row:
+│                              ‾‾‾  ‾‾‾                                        │  field + tabs
 ├───┬──────────────────────────────────────────────────────────────────────────┤
-│ S │ ┌──────────┬──────────┬────────────┐                                  ▲  │
-│ e │ │ 1. host  │ 2. host  │     +      │                                     │  tab bar
-│ s │ ├──────────┴──────────┴────────────┴──────────────────────────────────┐  │
-│ s │ │                                                                      │  │
-│ i │ │  terminal grid                                                       │  │
-│ o │ │                                                                      │  │
-│ n │ │                                                                      │  │
-│ s │ └──────────────────────────────────────────────────────────────────────┘  │
-│ ─ │                                                                          │
-│ T │  (for SSH sessions an SFTP panel docks inside the tab — phase 4)         │
-│ o │                                                                          │
-│ o │                                                                          │
-│ l │                                                                          │
-│ s │                                                                          │
+│ ★ │                                                                      ▲   │
+│ ⇱ │  terminal grid                                                           │
+│ ⇲ │                                                                          │
+│35 │  ~300 px session tree                                                    │
 ├───┴──────────────────────────────────────────────────────────────────────────┤
-│ X server: running  ·  DISPLAY=:0  ·  80x24  ·  ssh user@host                 │  status bar
+│ status bar — could not be measured from a maximised capture (see below)      │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The left edge strip carries **vertically rotated** tab labels. This is the most distinctive element
-of the layout and the one most often got wrong by imitators: the labels rotate, the strip is always
-visible even when the panel is collapsed, and the panel has pin / unpin / auto-hide states.
+Measured bands, from a colour scan down a column clear of icons and text at x=1500:
+
+| Band | Extent (window pixels, border removed) | Height | Fill |
+|---|---|---|---|
+| Title bar | 0..22 | 23 | `#211E26` |
+| Menu bar + ribbon + quick-connect row | 23..121 | 99 | `#141414`, no separators between them |
+| Separator | 122 | 1 | `#6A6A6A` |
+| Content | 123.. | rest | `#202020` |
+
+And across, at mid-height:
+
+| Band | Extent | Width | Fill |
+|---|---|---|---|
+| Vertical icon strip | 0..34 | **35** | `#141414` |
+| Separator | 35 | 1 | `#6A6A6A` |
+| Session tree panel | 36..334 | **~299** | `#141414`, scrollbar at its right edge |
+| Separator | 335 | 1 | `#6A6A6A` |
+| Terminal area | 336.. | rest | `#202020` |
+
+Three findings from the capture that contradict what this document assumed:
+
+* **Quick connect and the tab bar share one row.** The field sits on the left at roughly 333 px wide,
+  and the tab bar begins immediately to its right, starting with a home tab and a `+` tab. There is
+  **no Go button** — the field is committed with Enter. An earlier draft gave quick connect a
+  full-width row of its own and a Go button beside it.
+* **The menu bar, ribbon and quick-connect row are one continuous fill** with no rules between them.
+  Only the boundary with the content area is drawn, as a single grey hairline.
+* **The left edge strip is 35 px of icons, not rotated text.** This installation shows a star and two
+  arrows rather than the words `Sessions` / `Tools` / `Macros` / `Sftp`. Whether that is a 26.4 change
+  or a setting is `MEASURE` — it decides whether the rotated labels, described below as the most
+  distinctive element of the layout, are still part of the target at all.
+
+Not measurable from this capture, and needing a second one at a non-maximised size:
+
+* The status bar. A maximised window puts its last eight pixels past the bottom of the screen, which
+  is exactly where the status bar is, so nothing about its height or contents can be read from here.
+* Anything about resize behaviour, the collapsed sidebar, or the pin / unpin / auto-hide states.
+
+The theme in the captured installation is **dark**. This document and the implementation both assumed
+the light theme; which one is the default for a fresh install, and therefore which one parity is judged
+against, is `MEASURE`.
 
 ## Element inventory
 
 ### Menu bar
 
-| Menu | Status | Items |
+Measured from a capture of MobaXterm Professional 26.4.0.5512. **Eight** menus, in this order:
+
+| # | Menu | Items |
 |---|---|---|
-| Terminal | confirmed present | `MEASURE` — enumerate from capture |
-| Sessions | confirmed present | `MEASURE` |
-| View | confirmed present | `MEASURE` |
-| Split | confirmed present | grid layouts (2 / 3 / 4 panes) — enumerate exact set |
-| MultiExec | confirmed present | `MEASURE` |
-| Tunneling | confirmed present | `MEASURE` |
-| Packages | confirmed present | `MEASURE` |
-| Settings | confirmed present | `MEASURE` |
-| Macros | confirmed present | `MEASURE` |
-| Help | confirmed present | `MEASURE` |
+| 1 | Terminal | `MEASURE` — enumerate by opening each menu |
+| 2 | Sessions | `MEASURE` |
+| 3 | View | `MEASURE` |
+| 4 | X server | `MEASURE` |
+| 5 | Tools | `MEASURE` |
+| 6 | Settings | `MEASURE` |
+| 7 | Macros | `MEASURE` |
+| 8 | Help | `MEASURE` |
 
 Ordering above is the target ordering and must not be "improved".
+
+An earlier version of this document listed ten menus — Terminal, Sessions, View, Split, MultiExec,
+Tunneling, Packages, Settings, Macros, Help — and asserted that the titles "are already correct".
+They were not: they were written from memory before anyone had looked. `Split`, `MultiExec`,
+`Tunneling` and `Packages` exist only on the ribbon, and the two menus that *are* there, `X server`
+and `Tools`, were missing. The lesson is the one this document exists for: a claim about the reference
+is worth nothing until it has been measured against the reference.
 
 ### Ribbon toolbar
 
 A single row of large buttons, each an icon above a text label.
 
-| Button | Action | Notes |
-|---|---|---|
-| Session | open the Session dialog | primary entry point |
-| Servers | server tools submenu | phase 7 |
-| Tools | local tools submenu | phase 7 |
-| Games | — | present in the original; BestTerm omits it deliberately, see note below |
-| Sessions | session list / switcher | |
-| View | layout controls | |
-| Split | pane splitting | |
-| MultiExec | broadcast input to panes | phase 8 |
-| Tunneling | tunnel manager | phase 2 |
-| Packages | package manager | out of scope, see ARCHITECTURE.md on not cloning Cygwin |
-| Settings | settings dialog | |
-| Help | help / about | |
-| X server | toggle + status | phase 6 |
-| Exit | quit | |
+Measured from 26.4.0.5512. Two groups, and the split between them matters: eleven buttons drawn
+left-to-right with an icon above a text label, then a gap, then two buttons pinned to the right edge
+that have **an icon and no label at all**.
 
-Two deliberate divergences, both recorded here so they are decisions rather than omissions:
+| # | Button | Label? | Action | Notes |
+|---|---|---|---|---|
+| 1 | Session | yes | open the Session dialog | primary entry point |
+| 2 | Servers | yes | server tools submenu | phase 7 |
+| 3 | Tools | yes | local tools submenu | phase 7 |
+| 4 | Sessions | yes | session list / switcher | |
+| 5 | View | yes | layout controls | |
+| 6 | Split | yes | pane splitting | |
+| 7 | MultiExec | yes | broadcast input to panes | phase 8 |
+| 8 | Tunneling | yes | tunnel manager | phase 2 |
+| 9 | Packages | yes | package manager | out of scope, see ARCHITECTURE.md on not cloning Cygwin |
+| 10 | Settings | yes | settings dialog | |
+| 11 | Help | yes | help / about | |
+| — | *right edge* | | | |
+| 12 | X server | **no** | toggle + status | phase 6 |
+| 13 | Exit | **no** | quit | red power glyph |
 
-* **Games** — a novelty in the original with no role in a remote-access tool. Not reproduced.
+One deliberate divergence, and one correction:
+
+* **Games** — earlier drafts of this document recorded a `Games` button as present in the original and
+  deliberately omitted here. 26.4 has no such button, so there is nothing to omit; the note is kept
+  only so the disappearance is not mistaken for an oversight later.
 * **Packages** — MobaXterm's `MobApt` manages its bundled Cygwin environment. BestTerm does not
   bundle Cygwin (it detects WSL and PowerShell instead), so the button has nothing to manage. The
   slot is reserved rather than reused, to keep the ribbon's shape recognisable.

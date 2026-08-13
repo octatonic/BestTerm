@@ -156,10 +156,8 @@ const MENUS: &[(&str, &[&str])] = &[
         "View",
         &["Toggle sidebar", "Toggle status bar", "Full screen"],
     ),
-    ("Split", &["Two panes", "Three panes", "Four panes"]),
-    ("MultiExec", &["Start MultiExec", "Stop MultiExec"]),
-    ("Tunneling", &["Tunnel manager…", "New tunnel…"]),
-    ("Packages", &["Package manager…"]),
+    ("X server", &["Start X server", "Stop X server"]),
+    ("Tools", &["Tools…"]),
     ("Settings", &["Preferences…", "Keyboard shortcuts…"]),
     (
         "Macros",
@@ -184,9 +182,14 @@ const RIBBON: &[&str] = &[
     "Packages",
     "Settings",
     "Help",
-    "X server",
-    "Exit",
 ];
+
+/// The two buttons pinned to the ribbon's right edge, which carry an icon and no label.
+///
+/// Separate from [`RIBBON`] because the difference is structural rather than cosmetic: they are
+/// right-aligned, they are unlabelled, and a future icon set has to know that their glyph is the whole
+/// button. Measured from the reference; see `docs/ui-parity.md`.
+const RIBBON_RIGHT: &[&str] = &["X server", "Exit"];
 
 /// The menu bar.
 pub fn menu_bar(ui: &mut Ui, actions: &mut Vec<ChromeAction>) {
@@ -225,7 +228,44 @@ pub fn ribbon(ui: &mut Ui, theme: &ChromeTheme, actions: &mut Vec<ChromeAction>)
                 actions.push(ribbon_action(label));
             }
         }
+
+        // The last two sit against the right edge and carry no label, which is why they are drawn
+        // here rather than falling out of the loop above. Reversed because a right-to-left layout
+        // places the first thing it is given furthest right, and the reference has Exit outermost.
+        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+            for label in RIBBON_RIGHT.iter().rev() {
+                if ribbon_icon_button(ui, theme, label).clicked() {
+                    actions.push(ribbon_action(label));
+                }
+            }
+        });
     });
+}
+
+/// A right-edge ribbon button: an icon, no label, and a tooltip carrying the name instead.
+fn ribbon_icon_button(ui: &mut Ui, theme: &ChromeTheme, label: &str) -> Response {
+    let side = theme.ribbon_height - 8.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if response.is_pointer_button_down_on() {
+            painter.rect_filled(rect, CornerRadius::ZERO, theme.selected_bg);
+        } else if response.hovered() {
+            painter.rect_filled(rect, CornerRadius::ZERO, theme.hover_bg);
+        }
+        // The same hollow square the rest of the unfinished interface uses.
+        let icon = Rect::from_center_size(rect.center(), vec2(24.0, 24.0));
+        painter.rect_stroke(
+            icon,
+            CornerRadius::ZERO,
+            Stroke::new(1.0, theme.text_dim),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    // Without a label the button is a mystery box, so the name has to be reachable somehow.
+    response.on_hover_text(label)
 }
 
 fn ribbon_action(label: &'static str) -> ChromeAction {
@@ -242,6 +282,9 @@ fn ribbon_action(label: &'static str) -> ChromeAction {
 /// the ribbon's true height and spacing under test from the start.
 /// Side of the square that stands in for a tab's protocol icon.
 const TAB_ICON_SIZE: f32 = 12.0;
+
+/// Width of the quick-connect field, measured from the reference.
+const QUICK_CONNECT_WIDTH: f32 = 333.0;
 
 /// Draw the hollow square that stands in for an icon set nobody has drawn yet.
 ///
@@ -302,21 +345,24 @@ fn ribbon_button(ui: &mut Ui, theme: &ChromeTheme, label: &str) -> Response {
 }
 
 /// The quick-connect bar.
-pub fn quick_connect_bar(ui: &mut Ui, state: &mut ChromeState, actions: &mut Vec<ChromeAction>) {
-    ui.horizontal(|ui| {
-        ui.label("Quick connect:");
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut state.quick_connect)
-                .hint_text("user@host:port")
-                .desired_width(240.0),
-        );
-        let submitted = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (submitted || ui.button("Go").clicked()) && !state.quick_connect.trim().is_empty() {
-            actions.push(ChromeAction::QuickConnect(
-                state.quick_connect.trim().to_string(),
-            ));
-        }
-    });
+pub fn quick_connect_field(ui: &mut Ui, state: &mut ChromeState, actions: &mut Vec<ChromeAction>) {
+    // Measured at roughly 333 px in the reference, and no Go button beside it: the field is committed
+    // with Enter. See `docs/ui-parity.md`. An earlier version had a full-width row and a Go button,
+    // both of which were invented.
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut state.quick_connect)
+            .hint_text("Quick connect...")
+            .desired_width(QUICK_CONNECT_WIDTH),
+    );
+
+    // `lost_focus` alone fires when focus moves anywhere, including to another widget, so the key has
+    // to be checked as well or clicking away would connect.
+    let submitted = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if submitted && !state.quick_connect.trim().is_empty() {
+        actions.push(ChromeAction::QuickConnect(
+            state.quick_connect.trim().to_string(),
+        ));
+    }
 }
 
 /// The always-visible vertical tab strip on the left edge.
@@ -483,21 +529,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn menu_titles_and_order_match_the_parity_spec() {
+    fn the_menu_bar_matches_what_was_measured_from_the_reference() {
+        // Eight menus, measured from MobaXterm Professional 26.4.0.5512 rather than remembered. This
+        // test previously asserted ten, including Split, MultiExec, Tunneling and Packages, which are
+        // ribbon buttons and not menus at all -- and omitted X server and Tools, which are. It agreed
+        // with the implementation and both were wrong together, which is what a test written from the
+        // same assumption as the code buys you.
         let titles: Vec<&str> = MENUS.iter().map(|(title, _)| *title).collect();
         assert_eq!(
             titles,
             vec![
-                "Terminal",
-                "Sessions",
-                "View",
-                "Split",
-                "MultiExec",
-                "Tunneling",
-                "Packages",
-                "Settings",
-                "Macros",
-                "Help",
+                "Terminal", "Sessions", "View", "X server", "Tools", "Settings", "Macros", "Help",
             ]
         );
     }
@@ -510,16 +552,23 @@ mod tests {
     }
 
     #[test]
-    fn ribbon_starts_with_session_and_ends_with_exit() {
+    fn the_ribbon_runs_from_session_to_help_with_two_buttons_at_the_right_edge() {
+        // The reference draws eleven labelled buttons and then, against the right edge, two that
+        // carry an icon and no label. The split is structural, so it is worth pinning.
         assert_eq!(RIBBON.first(), Some(&"Session"));
-        assert_eq!(RIBBON.last(), Some(&"Exit"));
+        assert_eq!(RIBBON.last(), Some(&"Help"));
+        assert_eq!(RIBBON.len(), 11);
+        assert_eq!(RIBBON_RIGHT, ["X server", "Exit"]);
     }
 
     #[test]
-    fn ribbon_omits_games_and_keeps_packages() {
-        // Both are deliberate decisions recorded in docs/ui-parity.md.
-        assert!(!RIBBON.contains(&"Games"));
+    fn the_ribbon_keeps_packages_and_never_had_games() {
+        // Packages is deliberately present and deliberately inert; see docs/ui-parity.md. Games was
+        // recorded in an early draft as something the reference had and this deliberately omitted --
+        // 26.4 has no such button, so there is nothing being omitted.
         assert!(RIBBON.contains(&"Packages"));
+        assert!(!RIBBON.contains(&"Games"));
+        assert!(!RIBBON_RIGHT.contains(&"Games"));
     }
 
     #[test]
