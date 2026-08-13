@@ -303,6 +303,7 @@ dependencies = [
  "bestterm-term-render",
  "bestterm-transport",
  "bestterm-ui-chrome",
+ "crossbeam-channel",
  "eframe",
  "egui",
  "tracing",

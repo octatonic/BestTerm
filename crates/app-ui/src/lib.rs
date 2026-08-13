@@ -34,6 +34,11 @@ pub struct BestTermApp {
     shells: Vec<ShellProfile>,
     palette: Palette,
     theme_installed: bool,
+    /// Whether the shell that opens at startup has been opened.
+    ///
+    /// It cannot happen in the constructor: a tab needs something to wake when its output arrives,
+    /// and that only exists once there is an interface. See [`BestTermApp::open_shell`].
+    opened_first_shell: bool,
 }
 
 impl Default for BestTermApp {
@@ -43,12 +48,15 @@ impl Default for BestTermApp {
 }
 
 impl BestTermApp {
-    /// Build the application and open one local shell.
+    /// Build the application.
+    ///
+    /// No tab is opened here. Opening one needs something to wake when its output arrives, and that
+    /// only exists once the interface does — so the first shell opens on the first frame instead.
     pub fn new() -> Self {
         let shells = discover();
         tracing::info!(count = shells.len(), "discovered local shells");
 
-        let mut app = Self {
+        Self {
             theme: ChromeTheme::light(),
             term_style: TerminalStyle::default(),
             // Replaced with a real measurement on the first frame, once fonts exist.
@@ -61,20 +69,27 @@ impl BestTermApp {
             shells,
             palette: Palette::xterm(),
             theme_installed: false,
-        };
-        app.open_shell(0);
-        app
+            opened_first_shell: false,
+        }
     }
 
     /// Open a tab running `shells[index]`, or the first shell if the index is out of range.
-    fn open_shell(&mut self, index: usize) {
+    ///
+    /// `ctx` is what the tab's relay wakes when output arrives.
+    fn open_shell(&mut self, index: usize, ctx: &egui::Context) {
         let Some(profile) = self.shells.get(index).or_else(|| self.shells.first()) else {
             tracing::error!("no shells available; cannot open a tab");
             return;
         };
 
+        // A conventional size for the moment between opening and the first frame, which measures
+        // the window and resizes the tab to fit it.
         let (cols, rows) = (80, 24);
-        match TerminalTab::spawn(profile, cols, rows, SCROLLBACK, self.palette.clone()) {
+        let waker = {
+            let ctx = ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint()) as crate::tab::Waker
+        };
+        match TerminalTab::spawn(profile, cols, rows, SCROLLBACK, self.palette.clone(), waker) {
             Ok(tab) => {
                 self.tabs.push(tab);
                 self.chrome.active_tab = self.tabs.len() - 1;
@@ -111,7 +126,7 @@ impl BestTermApp {
     fn apply_actions(&mut self, actions: Vec<ChromeAction>, ctx: &egui::Context) {
         for action in actions {
             match action {
-                ChromeAction::NewLocalShell => self.open_shell(0),
+                ChromeAction::NewLocalShell => self.open_shell(0, ctx),
                 ChromeAction::SelectTab(index) if index < self.tabs.len() => {
                     self.chrome.active_tab = index;
                 }
@@ -144,6 +159,7 @@ impl BestTermApp {
             .iter()
             .map(|tab| TabInfo {
                 title: tab.title(),
+                program_title: tab.program_title(),
                 protocol: tab.protocol().to_string(),
                 tint: None,
             })
@@ -286,10 +302,17 @@ impl eframe::App for BestTermApp {
         }
         self.metrics = TerminalMetrics::measure(&ctx, &self.term_style);
 
+        if !self.opened_first_shell {
+            self.opened_first_shell = true;
+            self.open_shell(0, &ctx);
+        }
+
         let output_arrived = self.pump();
         self.sync_chrome();
 
         let mut actions: Vec<ChromeAction> = Vec::new();
+        // Filled by the left panel, acted on after it has finished drawing.
+        let mut requested_shell: Option<usize> = None;
 
         // Cloned once per frame so the panel closures below borrow a local rather than `self`,
         // which would otherwise conflict with the two closures that need `&mut self`. The theme is
@@ -332,7 +355,7 @@ impl eframe::App for BestTermApp {
                 .default_size(theme.sidebar_width)
                 .min_size(theme.sidebar_min_width)
                 .frame(chrome_frame(theme.chrome_bg))
-                .show(ui, |ui| self.sidebar_contents(ui));
+                .show(ui, |ui| requested_shell = self.sidebar_contents(ui));
         }
 
         CentralPanel::no_frame().show(ui, |ui| {
@@ -345,10 +368,15 @@ impl eframe::App for BestTermApp {
             self.terminal_ui(ui);
         });
 
+        if let Some(index) = requested_shell {
+            self.open_shell(index, &ctx);
+        }
+
         self.apply_actions(actions, &ctx);
 
-        // Repaint on new output. Otherwise egui idles, which is exactly what we want: an idle
-        // terminal must not burn a core redrawing an unchanged screen.
+        // A repaint here covers the case where the output budget was reached and bytes are still
+        // queued. Waking on *arrival* is the relay's job — see `tab.rs` — because a frame is the one
+        // thing that cannot schedule itself.
         if output_arrived {
             ctx.request_repaint();
         }
@@ -360,7 +388,11 @@ impl BestTermApp {
     ///
     /// The session tree lands in phase 2 and the SFTP browser in phase 4; the panel exists now so the
     /// layout it participates in is correct from the start.
-    fn sidebar_contents(&mut self, ui: &mut egui::Ui) {
+    /// Draw the left panel, returning a shell the person asked to open.
+    ///
+    /// Returned rather than opened here: this runs inside a closure that already holds `&mut self`,
+    /// and opening a tab needs the interface context, which the caller has.
+    fn sidebar_contents(&mut self, ui: &mut egui::Ui) -> Option<usize> {
         match self.chrome.sidebar_panel {
             SidebarPanel::Sessions => {
                 ui.label(egui::RichText::new("User sessions").strong());
@@ -371,9 +403,10 @@ impl BestTermApp {
                     .enumerate()
                     .map(|(index, shell)| (index, shell.label.clone()))
                     .collect();
+                let mut requested = None;
                 for (index, label) in shells {
                     if ui.selectable_label(false, label).double_clicked() {
-                        self.open_shell(index);
+                        requested = Some(index);
                     }
                 }
                 ui.add_space(6.0);
@@ -382,12 +415,15 @@ impl BestTermApp {
                         .small()
                         .color(self.theme.text_dim),
                 );
+                requested
             }
             SidebarPanel::Tools => {
                 ui.label("Tools");
+                None
             }
             SidebarPanel::Macros => {
                 ui.label("Macros");
+                None
             }
             SidebarPanel::Sftp => {
                 ui.label("Sftp");
@@ -396,6 +432,7 @@ impl BestTermApp {
                         .small()
                         .color(self.theme.text_dim),
                 );
+                None
             }
         }
     }

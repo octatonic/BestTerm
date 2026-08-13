@@ -59,7 +59,16 @@ impl SidebarPanel {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabInfo {
     /// Text shown on the tab.
+    ///
+    /// The session's own name, not whatever the program running inside it last set. A shell that
+    /// announces itself as `C:\Windows\System32\WindowsPowerShell1.0\powershell.exe` -- which is
+    /// exactly what PowerShell does -- would otherwise fill the tab bar with one tab.
     pub title: String,
+    /// What the program inside set as its title, when it set one and it differs from `title`.
+    ///
+    /// Shown on hover, so `vim` announcing a filename is still reachable without letting it rename
+    /// the tab.
+    pub program_title: Option<String>,
     /// Protocol identifier, used to pick the icon.
     pub protocol: String,
     /// Per-session tab colour, imported from `.mxtsessions` where present.
@@ -231,6 +240,25 @@ fn ribbon_action(label: &'static str) -> ChromeAction {
 ///
 /// The box becomes the real icon in phase 1. Drawing a visible placeholder rather than nothing keeps
 /// the ribbon's true height and spacing under test from the start.
+/// Side of the square that stands in for a tab's protocol icon.
+const TAB_ICON_SIZE: f32 = 12.0;
+
+/// Draw the hollow square that stands in for an icon set nobody has drawn yet.
+///
+/// One function for both the ribbon and the tab bar, so the unfinished parts of the interface look
+/// unfinished in the same way rather than in two different ways.
+fn icon_placeholder(ui: &mut Ui, theme: &ChromeTheme, side: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::ZERO,
+            Stroke::new(1.0, theme.text_dim),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
 fn ribbon_button(ui: &mut Ui, theme: &ChromeTheme, label: &str) -> Response {
     let size = vec2(theme.ribbon_button_width, theme.ribbon_height - 4.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -405,12 +433,17 @@ fn tab_widget(ui: &mut Ui, theme: &ChromeTheme, tab: &TabInfo, active: bool) -> 
                 .inner_margin(egui::Margin::symmetric(6, 2))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        // Placeholder for the protocol icon; real icons land in phase 1.
-                        // Taken by character, not by byte: slicing `&s[..1]` panics on a
-                        // multi-byte first character.
-                        let initial: String = tab.protocol.chars().next().into_iter().collect();
-                        ui.label(egui::RichText::new(initial).small());
-                        ui.label(&tab.title);
+                        // A placeholder for the protocol icon, drawn as the same empty square the
+                        // ribbon uses so that the two read as the same unfinished thing. It used to
+                        // be the protocol's first letter, which produced tabs labelled
+                        // "sC:\Windows\..." -- a placeholder that looks like corruption is worse
+                        // than one that looks like a placeholder.
+                        icon_placeholder(ui, theme, TAB_ICON_SIZE);
+                        ui.add_space(4.0);
+                        let label = ui.label(&tab.title);
+                        if let Some(program) = &tab.program_title {
+                            label.on_hover_text(program);
+                        }
                         if ui.small_button("x").clicked() {
                             close_requested = true;
                         }

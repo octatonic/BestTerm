@@ -203,5 +203,8 @@ Marked here so nobody mistakes them for finished design:
 * `rust-version = "1.95"` is load-bearing, not decorative. cargo resolves to the newest versions the
   declared MSRV permits, so understating it makes cargo prefer *older* dependencies — including ones
   with unfixed advisories. The number must track what the tree actually requires.
-* The application has never been run. No window has ever opened, so chrome layout, font metrics,
-  rotated sidebar labels and input handling are unverified by anything but a compiler.
+* The application has now been run, and the first two things it did were expose bugs no test could
+  have: output arriving did not wake the interface, and a placeholder icon that was the protocol's
+  first letter produced tabs labelled `sC:\Windows\...`. Both are fixed. What is still unverified is
+  everything measured rather than merely present: pixel parity against `ui-parity.md`, behaviour at
+  150% and 200% scaling, and font metrics under a different DPI.
