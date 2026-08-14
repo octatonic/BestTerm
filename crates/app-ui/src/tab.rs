@@ -19,7 +19,8 @@ use std::sync::Arc;
 use bestterm_core_pty::{PtyTransport, ShellProfile};
 use bestterm_core_terminal::{AlacrittyEmulator, Palette, TerminalEmulator};
 use bestterm_transport::{
-    EventReceiver, ExitInfo, GridSize, Result as TransportResult, Transport, TransportEvent,
+    EventReceiver, ExitInfo, GridSize, OpenTransport, Result as TransportResult, Transport,
+    TransportEvent,
 };
 
 /// Bytes accepted from one transport in a single frame.
@@ -93,17 +94,42 @@ impl TerminalTab {
         waker: Waker,
     ) -> TransportResult<Self> {
         let open = PtyTransport::spawn(profile, GridSize::new(cols as u16, rows as u16))?;
-        let emulator = AlacrittyEmulator::new(cols, rows, scrollback, palette);
-        let events = relay(open.events, waker, profile.label.clone());
+        Ok(Self::adopt(
+            open,
+            profile.label.clone(),
+            cols,
+            rows,
+            scrollback,
+            palette,
+            waker,
+        ))
+    }
 
-        Ok(Self {
+    /// Take over a transport somebody else opened.
+    ///
+    /// A local shell and an SSH session differ only in how the transport comes into being; once it
+    /// exists, a tab treats them identically, which is the point of [`Transport`] being a trait. This
+    /// is the constructor SSH uses, and [`TerminalTab::spawn`] is a thin wrapper over it.
+    pub(crate) fn adopt(
+        open: OpenTransport,
+        title: String,
+        cols: usize,
+        rows: usize,
+        scrollback: usize,
+        palette: Palette,
+        waker: Waker,
+    ) -> Self {
+        let emulator = AlacrittyEmulator::new(cols, rows, scrollback, palette);
+        let events = relay(open.events, waker, title.clone());
+
+        Self {
             transport: open.transport,
             events,
             emulator,
-            fallback_title: profile.label.clone(),
+            fallback_title: title,
             exit: None,
             grid: (cols, rows),
-        })
+        }
     }
 
     /// Drain pending output into the emulator and send back anything it owes the peer.

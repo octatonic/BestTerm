@@ -16,12 +16,16 @@ workspace = true
 # produces a `ProtocolConfig`, and this crate is what receives it.
 bestterm-core-model.workspace = true
 bestterm-core-pty.workspace = true
+# SSH, and the runtime it needs. The interface is synchronous and the protocol is not, so the
+# application owns a runtime and the two speak over channels -- see src/ssh.rs.
+bestterm-proto-ssh.workspace = true
 bestterm-core-terminal.workspace = true
 bestterm-term-render.workspace = true
 bestterm-transport.workspace = true
 bestterm-ui-chrome.workspace = true
 # The relay channel each tab owns; see crates/app-ui/src/tab.rs.
 crossbeam-channel.workspace = true
+tokio.workspace = true
 eframe.workspace = true
 egui.workspace = true
 tracing.workspace = true

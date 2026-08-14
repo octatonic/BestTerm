@@ -3,6 +3,7 @@
 //! This is the only crate that knows about all the others. Everything below it is independently
 //! testable, which is the point — see `docs/ARCHITECTURE.md`.
 
+mod ssh;
 mod tab;
 
 use bestterm_core_pty::{ShellProfile, discover};
@@ -17,6 +18,7 @@ use bestterm_ui_chrome::{
 };
 use egui::{CentralPanel, CornerRadius, EventFilter, Frame, Panel, Sense, Stroke};
 
+use crate::ssh::{HostKeyQuestion, HostKeyRecord, HostKeyVerdict, SessionEvent};
 use crate::tab::TerminalTab;
 
 /// Environment variable that puts the interface into a named state at startup.
@@ -56,6 +58,23 @@ pub struct BestTermApp {
     opened_first_shell: bool,
     /// The Session settings dialog, whether or not it is on screen.
     dialog: SessionDialog,
+    /// Where network work happens.
+    ///
+    /// Held for the whole life of the application: dropping a runtime waits for its tasks, which on the
+    /// interface thread would freeze the window.
+    runtime: tokio::runtime::Runtime,
+    /// Outcomes of connection attempts, drained each frame.
+    sessions: (
+        crossbeam_channel::Sender<SessionEvent>,
+        crossbeam_channel::Receiver<SessionEvent>,
+    ),
+    /// The host key question currently on screen, if any.
+    ///
+    /// One at a time. Two prompts about two different servers, stacked, is how somebody accepts the
+    /// wrong one.
+    pending_host_key: Option<HostKeyQuestion>,
+    /// Connection failures worth showing, newest last.
+    notices: Vec<String>,
 }
 
 impl Default for BestTermApp {
@@ -88,6 +107,15 @@ impl BestTermApp {
             theme_installed: false,
             opened_first_shell: false,
             dialog: SessionDialog::default(),
+            runtime: tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .thread_name("bestterm-net")
+                .build()
+                .expect("a tokio runtime"),
+            sessions: crossbeam_channel::unbounded(),
+            pending_host_key: None,
+            notices: Vec::new(),
         }
     }
 
@@ -156,8 +184,12 @@ impl BestTermApp {
                 ChromeAction::SelectSidebarPanel(panel) => self.chrome.sidebar_panel = panel,
                 ChromeAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 ChromeAction::QuickConnect(target) => {
-                    // SSH arrives in phase 2. Reported rather than silently dropped.
-                    tracing::info!(%target, "quick connect requested; SSH lands in phase 2");
+                    match parse_quick_connect(&target) {
+                        Some(config) => self.connect_ssh(config, ctx),
+                        None => self
+                            .notices
+                            .push(format!("could not read '{target}' as user@host:port")),
+                    }
                     self.chrome.quick_connect.clear();
                 }
                 ChromeAction::OpenSessionDialog => self.dialog.open_fresh(),
@@ -165,6 +197,186 @@ impl BestTermApp {
                     tracing::info!(control = what, "not implemented yet");
                 }
             }
+        }
+    }
+
+    /// Start an SSH session in the background.
+    ///
+    /// Returns immediately: a connection takes as long as a network does, and the frame loop cannot
+    /// wait for one. The outcome arrives on [`Self::sessions`] and is picked up by a later frame.
+    fn connect_ssh(&mut self, config: bestterm_core_model::SshConfig, ctx: &egui::Context) {
+        let waker = {
+            let ctx = ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint())
+                as std::sync::Arc<dyn Fn() + Send + Sync>
+        };
+        let size = self
+            .tabs
+            .get(self.chrome.active_tab)
+            .map(|tab| {
+                let (cols, rows) = tab.grid();
+                GridSize::new(cols as u16, rows as u16)
+            })
+            .unwrap_or(GridSize::new(80, 24));
+
+        tracing::info!(host = %config.host, port = config.port, "connecting");
+        ssh::connect(
+            self.runtime.handle(),
+            config,
+            read_known_hosts(),
+            size,
+            self.sessions.0.clone(),
+            waker,
+        );
+    }
+
+    /// Take whatever the runtime has reported since the last frame.
+    fn drain_sessions(&mut self, ctx: &egui::Context) {
+        while let Ok(event) = self.sessions.1.try_recv() {
+            match event {
+                SessionEvent::Opened {
+                    title,
+                    open,
+                    record,
+                } => {
+                    if let Some(record) = record {
+                        append_known_host(&record);
+                    }
+                    let waker = {
+                        let ctx = ctx.clone();
+                        std::sync::Arc::new(move || ctx.request_repaint()) as crate::tab::Waker
+                    };
+                    let (cols, rows) = (80, 24);
+                    let tab = TerminalTab::adopt(
+                        *open,
+                        title,
+                        cols,
+                        rows,
+                        SCROLLBACK,
+                        self.palette.clone(),
+                        waker,
+                    );
+                    self.tabs.push(tab);
+                    self.chrome.active_tab = self.tabs.len() - 1;
+                }
+                SessionEvent::Failed { title, reason } => {
+                    tracing::warn!(%title, %reason, "connection failed");
+                    self.notices.push(format!("{title}: {reason}"));
+                }
+                SessionEvent::AskAboutHostKey(question) => {
+                    // One at a time. Two stacked prompts about two servers is how somebody accepts
+                    // the wrong one; the rest wait their turn on the channel.
+                    if self.pending_host_key.is_none() {
+                        self.pending_host_key = Some(question);
+                    } else {
+                        question.answer(bestterm_proto_ssh::host_key::HostKeyDecision::Reject);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ask about a server's host key, if one is waiting.
+    ///
+    /// The three answers are the three the protocol layer defines, and each says what it does rather
+    /// than yes or no: somebody who has been shown a fingerprint deserves to know whether they are
+    /// about to write it down.
+    fn host_key_prompt(&mut self, ctx: &egui::Context) {
+        use bestterm_proto_ssh::host_key::HostKeyDecision;
+
+        let Some(question) = self.pending_host_key.clone() else {
+            return;
+        };
+        let mut answered = None;
+
+        egui::Modal::new(egui::Id::new("bestterm_host_key")).show(ctx, |ui| {
+            ui.set_max_width(520.0);
+            match &question.verdict {
+                HostKeyVerdict::Unknown => {
+                    ui.heading("A server you have not connected to before");
+                    ui.label(format!(
+                        "{}:{} presented this key:",
+                        question.host, question.port
+                    ));
+                    ui.add_space(4.0);
+                    ui.monospace(&question.presented);
+                    ui.add_space(4.0);
+                    ui.label("Accept it only if it matches what the server's administrator published.");
+                }
+                HostKeyVerdict::Changed { expected } => {
+                    // Deliberately not phrased as a question about a "new" key. A changed key is what
+                    // a machine-in-the-middle looks like, and it is also what a rebuilt server looks
+                    // like, and only the person can tell those apart.
+                    ui.heading("This server's key has CHANGED");
+                    ui.label(format!("{}:{} now presents:", question.host, question.port));
+                    ui.add_space(4.0);
+                    ui.monospace(&question.presented);
+                    ui.add_space(4.0);
+                    ui.label(if expected.len() == 1 {
+                        "but the key recorded for it is:"
+                    } else {
+                        "but the keys recorded for it are:"
+                    });
+                    for fingerprint in expected {
+                        ui.monospace(fingerprint);
+                    }
+                    ui.add_space(4.0);
+                    ui.label(
+                        "Either the server was rebuilt, or something is impersonating it. Do not accept this unless you know which.",
+                    );
+                }
+                HostKeyVerdict::Revoked => {
+                    ui.heading("This key was revoked");
+                    ui.label(format!(
+                        "{}:{} presented a key recorded as revoked. It will not be accepted.",
+                        question.host, question.port
+                    ));
+                }
+            }
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let revoked = question.verdict == HostKeyVerdict::Revoked;
+                ui.add_enabled_ui(!revoked, |ui| {
+                    if ui.button("Accept and remember").clicked() {
+                        answered = Some(HostKeyDecision::AcceptAndStore);
+                    }
+                    if ui.button("Accept just this once").clicked() {
+                        answered = Some(HostKeyDecision::Accept);
+                    }
+                });
+                if ui.button("Do not connect").clicked() {
+                    answered = Some(HostKeyDecision::Reject);
+                }
+            });
+        });
+
+        if let Some(decision) = answered {
+            question.answer(decision);
+            self.pending_host_key = None;
+        }
+    }
+
+    /// Show whatever went wrong, until it is dismissed.
+    fn notice_window(&mut self, ctx: &egui::Context) {
+        if self.notices.is_empty() {
+            return;
+        }
+        let mut dismiss = false;
+        egui::Window::new("Messages")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                for notice in &self.notices {
+                    ui.label(notice);
+                }
+                ui.add_space(6.0);
+                if ui.button("Dismiss").clicked() {
+                    dismiss = true;
+                }
+            });
+        if dismiss {
+            self.notices.clear();
         }
     }
 
@@ -190,15 +402,17 @@ impl BestTermApp {
     /// turning a `ProtocolConfig` into a live connection is the next piece of work. Each outcome is
     /// reported rather than dropped, because a dialog that closes and does nothing is
     /// indistinguishable from one that is broken.
-    fn apply_dialog_outcome(&mut self, outcome: DialogOutcome) {
+    fn apply_dialog_outcome(&mut self, outcome: DialogOutcome, ctx: &egui::Context) {
         match outcome {
-            DialogOutcome::Accepted(config) => {
-                tracing::info!(
-                    protocol = config.protocol().id(),
-                    host = config.host().unwrap_or("-"),
-                    "session described; connecting is the next piece of work"
-                );
-            }
+            DialogOutcome::Accepted(config) => match *config {
+                bestterm_core_model::ProtocolConfig::Ssh(ssh) => self.connect_ssh(ssh, ctx),
+                other => {
+                    self.notices.push(format!(
+                        "{} sessions cannot be opened yet",
+                        other.protocol().id()
+                    ));
+                }
+            },
             DialogOutcome::Cancelled => tracing::debug!("session dialog cancelled"),
             DialogOutcome::Unsupported(name) => {
                 tracing::warn!(protocol = name, "no session model for this protocol yet");
@@ -365,6 +579,7 @@ impl eframe::App for BestTermApp {
             self.apply_requested_state();
         }
 
+        self.drain_sessions(&ctx);
         let output_arrived = self.pump();
         self.sync_chrome();
 
@@ -419,7 +634,7 @@ impl eframe::App for BestTermApp {
                 .show(ui, |ui| session_dialog(ui, &theme, &mut self.dialog));
 
             if let Some(outcome) = self.dialog.take_outcome() {
-                self.apply_dialog_outcome(outcome);
+                self.apply_dialog_outcome(outcome, &ctx);
             }
             self.apply_actions(actions, &ctx);
             return;
@@ -445,6 +660,11 @@ impl eframe::App for BestTermApp {
         }
 
         CentralPanel::no_frame().show(ui, |ui| self.terminal_ui(ui));
+
+        // Modal, and over everything: a question about a server's identity is not something to
+        // answer by accident while reaching for a tab.
+        self.host_key_prompt(&ctx);
+        self.notice_window(&ctx);
 
         if let Some(index) = requested_shell {
             self.open_shell(index, &ctx);
@@ -511,6 +731,112 @@ impl BestTermApp {
     }
 }
 
+/// Read the user's `known_hosts`, or an empty store if there is none.
+///
+/// OpenSSH's file, deliberately: somebody who already trusts a host from the command line should not be
+/// asked about it again here, and a second store would mean two answers to the same question.
+fn read_known_hosts() -> String {
+    let Some(home) = home_directory() else {
+        return String::new();
+    };
+    std::fs::read_to_string(home.join(".ssh").join("known_hosts")).unwrap_or_default()
+}
+
+/// Append an accepted key to `known_hosts`.
+///
+/// Rendering the line is `proto-ssh`'s business; this only decides where it goes. Failures are logged
+/// and not fatal: a session that works but could not be written down is better than one refused because
+/// a file was read-only.
+fn append_known_host(record: &HostKeyRecord) {
+    use bestterm_proto_ssh::known_hosts::KnownHosts;
+    use std::io::Write as _;
+
+    let mut store = KnownHosts::new();
+    let line = match store.add(&record.host, record.port, &record.key, false) {
+        Ok(line) => line,
+        Err(error) => {
+            tracing::warn!(%error, "could not render a known_hosts entry");
+            return;
+        }
+    };
+
+    let Some(home) = home_directory() else {
+        return;
+    };
+    let directory = home.join(".ssh");
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        tracing::warn!(%error, "could not create the .ssh directory");
+        return;
+    }
+    let path = directory.join("known_hosts");
+    let opened = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path);
+    match opened {
+        Ok(mut file) => {
+            if let Err(error) = writeln!(file, "{line}") {
+                tracing::warn!(%error, "could not append to known_hosts");
+            }
+        }
+        Err(error) => tracing::warn!(%error, "could not open known_hosts for appending"),
+    }
+}
+
+/// The user's home directory, from the environment.
+fn home_directory() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+}
+
+/// Read `user@host:port` as an SSH session.
+///
+/// The user and the port are both optional, which is what makes this worth a function: `srv.int`,
+/// `admin@srv.int` and `admin@srv.int:2222` all have to work, and a bracketed IPv6 address must not have
+/// its colons mistaken for a port separator.
+fn parse_quick_connect(text: &str) -> Option<bestterm_core_model::SshConfig> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    // Split at the last `@`: a password is never in this field, but a user name legitimately contains
+    // one when it is an email-shaped login.
+    let (user, rest) = match text.rsplit_once('@') {
+        Some((user, rest)) if !user.is_empty() && !rest.is_empty() => (Some(user.to_owned()), rest),
+        Some(_) => return None,
+        None => (None, text),
+    };
+
+    let (host, port) = if let Some(inner) = rest.strip_prefix('[') {
+        let (address, tail) = inner.split_once(']')?;
+        let port = match tail.strip_prefix(':') {
+            Some(port) => Some(port.parse().ok()?),
+            None if tail.is_empty() => None,
+            None => return None,
+        };
+        (address.to_owned(), port)
+    } else {
+        match rest.rsplit_once(':') {
+            // More than one colon and no brackets is a bare IPv6 address, which has no port.
+            Some((head, _)) if head.contains(':') => (rest.to_owned(), None),
+            Some((host, port)) => (host.to_owned(), Some(port.parse().ok()?)),
+            None => (rest.to_owned(), None),
+        }
+    };
+
+    if host.is_empty() {
+        return None;
+    }
+    Some(bestterm_core_model::SshConfig {
+        host,
+        port: port.unwrap_or(22),
+        user,
+        ..bestterm_core_model::SshConfig::default()
+    })
+}
+
 /// A square, hairline-bordered chrome panel.
 fn chrome_frame(fill: egui::Color32) -> Frame {
     Frame::NONE
@@ -556,5 +882,64 @@ mod tests {
     fn grid_size_never_reports_zero_dimensions() {
         let g = grid_size(0, 0, (0, 0));
         assert_eq!((g.cols, g.rows), (1, 1));
+    }
+
+    #[test]
+    fn quick_connect_reads_a_bare_host() {
+        let config = parse_quick_connect("srv.int").expect("a host alone is enough");
+        assert_eq!(config.host, "srv.int");
+        assert_eq!(config.port, 22);
+        assert_eq!(config.user, None);
+    }
+
+    #[test]
+    fn quick_connect_reads_a_user_and_a_port() {
+        let config = parse_quick_connect(" admin@srv.int:2222 ").expect("parses");
+        assert_eq!(config.user.as_deref(), Some("admin"));
+        assert_eq!(config.host, "srv.int");
+        assert_eq!(config.port, 2222);
+    }
+
+    #[test]
+    fn quick_connect_splits_at_the_last_at_sign() {
+        // A login shaped like an email address is a real thing, and it contains an `@`.
+        let config = parse_quick_connect("first.last@corp.example@bastion.int").expect("parses");
+        assert_eq!(config.user.as_deref(), Some("first.last@corp.example"));
+        assert_eq!(config.host, "bastion.int");
+    }
+
+    #[test]
+    fn quick_connect_does_not_mistake_an_ipv6_address_for_a_port() {
+        // The colons in `2001:db8::1` are part of the address. Reading the last one as a port
+        // separator would send somebody to a host that does not exist.
+        let bare = parse_quick_connect("2001:db8::1").expect("a bare ipv6 address");
+        assert_eq!(bare.host, "2001:db8::1");
+        assert_eq!(bare.port, 22);
+
+        let bracketed = parse_quick_connect("[2001:db8::1]:2222").expect("bracketed with a port");
+        assert_eq!(bracketed.host, "2001:db8::1");
+        assert_eq!(bracketed.port, 2222);
+
+        let no_port = parse_quick_connect("[2001:db8::1]").expect("bracketed without a port");
+        assert_eq!(no_port.host, "2001:db8::1");
+        assert_eq!(no_port.port, 22);
+    }
+
+    #[test]
+    fn quick_connect_refuses_what_it_cannot_read() {
+        // Each of these would otherwise become a connection to somewhere unintended.
+        assert!(parse_quick_connect("").is_none());
+        assert!(parse_quick_connect("   ").is_none());
+        assert!(parse_quick_connect("@srv.int").is_none(), "no user");
+        assert!(parse_quick_connect("admin@").is_none(), "no host");
+        assert!(parse_quick_connect("srv.int:").is_none(), "empty port");
+        assert!(
+            parse_quick_connect("srv.int:no").is_none(),
+            "port is not a number"
+        );
+        assert!(
+            parse_quick_connect("srv.int:99999").is_none(),
+            "port does not fit"
+        );
     }
 }

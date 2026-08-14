@@ -301,12 +301,14 @@ dependencies = [
  "bestterm-core-model",
  "bestterm-core-pty",
  "bestterm-core-terminal",
+ "bestterm-proto-ssh",
  "bestterm-term-render",
  "bestterm-transport",
  "bestterm-ui-chrome",
  "crossbeam-channel",
  "eframe",
  "egui",
+ "tokio",
  "tracing",
 ]
 
