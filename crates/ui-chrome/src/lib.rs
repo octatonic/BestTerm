@@ -15,8 +15,12 @@
 //! have no implementation yet report [`ChromeAction::Unimplemented`] instead of silently doing
 //! nothing.
 
+pub mod session_dialog;
 pub mod theme;
 
+pub use session_dialog::{
+    DialogOutcome, DialogProtocol, SessionDialog, SessionFields, session_dialog,
+};
 pub use theme::{ChromeTheme, apply as apply_theme};
 
 use egui::{

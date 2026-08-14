@@ -298,6 +298,7 @@ dependencies = [
 name = "bestterm-app-ui"
 version = "0.1.0"
 dependencies = [
+ "bestterm-core-model",
  "bestterm-core-pty",
  "bestterm-core-terminal",
  "bestterm-term-render",
@@ -433,6 +434,7 @@ dependencies = [
 name = "bestterm-ui-chrome"
 version = "0.1.0"
 dependencies = [
+ "bestterm-core-model",
  "egui",
 ]
 

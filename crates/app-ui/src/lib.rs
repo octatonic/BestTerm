@@ -11,13 +11,27 @@ use bestterm_term_render::keys::{self, TermKey};
 use bestterm_term_render::{TerminalMetrics, TerminalStyle};
 use bestterm_transport::GridSize;
 use bestterm_ui_chrome::{
-    ChromeAction, ChromeState, ChromeTheme, SidebarPanel, StatusInfo, TabInfo, apply_theme,
-    macros_panel, menu_bar, quick_connect_field, ribbon, sidebar_strip, status_bar, tab_bar,
-    tools_panel,
+    ChromeAction, ChromeState, ChromeTheme, DialogOutcome, SessionDialog, SidebarPanel, StatusInfo,
+    TabInfo, apply_theme, macros_panel, menu_bar, quick_connect_field, ribbon, session_dialog,
+    sidebar_strip, status_bar, tab_bar, tools_panel,
 };
 use egui::{CentralPanel, CornerRadius, EventFilter, Frame, Panel, Sense, Stroke};
 
 use crate::tab::TerminalTab;
+
+/// Environment variable that puts the interface into a named state at startup.
+///
+/// Parity is judged by comparing screenshots against the reference, and a screenshot of the session
+/// dialog needs the session dialog open. Driving synthetic mouse clicks at somebody's desktop to get
+/// there is both unreliable and rude, so the state is nameable instead:
+///
+/// ```sh
+/// BESTTERM_UI_STATE=session-dialog bestterm
+/// ```
+///
+/// Understood values are `session-dialog`, `tools` and `macros`. Anything else is ignored, silently,
+/// because a typo here should not stop the application from starting.
+const UI_STATE_VARIABLE: &str = "BESTTERM_UI_STATE";
 
 /// Scrollback lines kept per tab.
 ///
@@ -40,6 +54,8 @@ pub struct BestTermApp {
     /// It cannot happen in the constructor: a tab needs something to wake when its output arrives,
     /// and that only exists once there is an interface. See [`BestTermApp::open_shell`].
     opened_first_shell: bool,
+    /// The Session settings dialog, whether or not it is on screen.
+    dialog: SessionDialog,
 }
 
 impl Default for BestTermApp {
@@ -71,6 +87,7 @@ impl BestTermApp {
             palette: Palette::xterm(),
             theme_installed: false,
             opened_first_shell: false,
+            dialog: SessionDialog::default(),
         }
     }
 
@@ -143,12 +160,51 @@ impl BestTermApp {
                     tracing::info!(%target, "quick connect requested; SSH lands in phase 2");
                     self.chrome.quick_connect.clear();
                 }
-                ChromeAction::OpenSessionDialog => {
-                    tracing::info!("session dialog requested; it lands in phase 2");
-                }
+                ChromeAction::OpenSessionDialog => self.dialog.open_fresh(),
                 ChromeAction::Unimplemented(what) => {
                     tracing::info!(control = what, "not implemented yet");
                 }
+            }
+        }
+    }
+
+    /// Put the interface into the state [`UI_STATE_VARIABLE`] asked for, if it asked for one.
+    ///
+    /// Runs once, on the first frame, after the initial shell has opened so that a capture shows the
+    /// requested state over a real session rather than an empty window.
+    fn apply_requested_state(&mut self) {
+        let Ok(state) = std::env::var(UI_STATE_VARIABLE) else {
+            return;
+        };
+        match state.as_str() {
+            "session-dialog" => self.dialog.open_fresh(),
+            "tools" => self.chrome.sidebar_panel = SidebarPanel::Tools,
+            "macros" => self.chrome.sidebar_panel = SidebarPanel::Macros,
+            other => tracing::warn!(state = other, "unknown {UI_STATE_VARIABLE} value; ignored"),
+        }
+    }
+
+    /// Act on what the Session settings dialog produced.
+    ///
+    /// Nothing connects yet: the session model reaches the application here for the first time, and
+    /// turning a `ProtocolConfig` into a live connection is the next piece of work. Each outcome is
+    /// reported rather than dropped, because a dialog that closes and does nothing is
+    /// indistinguishable from one that is broken.
+    fn apply_dialog_outcome(&mut self, outcome: DialogOutcome) {
+        match outcome {
+            DialogOutcome::Accepted(config) => {
+                tracing::info!(
+                    protocol = config.protocol().id(),
+                    host = config.host().unwrap_or("-"),
+                    "session described; connecting is the next piece of work"
+                );
+            }
+            DialogOutcome::Cancelled => tracing::debug!("session dialog cancelled"),
+            DialogOutcome::Unsupported(name) => {
+                tracing::warn!(protocol = name, "no session model for this protocol yet");
+            }
+            DialogOutcome::Incomplete { field } => {
+                tracing::warn!(field, "a required field was empty");
             }
         }
     }
@@ -306,6 +362,7 @@ impl eframe::App for BestTermApp {
         if !self.opened_first_shell {
             self.opened_first_shell = true;
             self.open_shell(0, &ctx);
+            self.apply_requested_state();
         }
 
         let output_arrived = self.pump();
@@ -350,6 +407,23 @@ impl eframe::App for BestTermApp {
             .exact_size(theme.status_bar_height)
             .frame(chrome_frame(theme.chrome_bg))
             .show(ui, |ui| status_bar(ui, &theme, &self.chrome.status));
+
+        // The dialog covers everything below the quick-connect row -- the sidebar included, which is
+        // where the reference puts it. Drawn here rather than inside the central panel because at this
+        // point the remaining rectangle is still the full width of the window; adding the left panels
+        // first would confine it to the session area and leave its fifteen tabs wrapping onto two rows.
+        if self.dialog.open {
+            Frame::NONE
+                .fill(theme.chrome_bg)
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| session_dialog(ui, &theme, &mut self.dialog));
+
+            if let Some(outcome) = self.dialog.take_outcome() {
+                self.apply_dialog_outcome(outcome);
+            }
+            self.apply_actions(actions, &ctx);
+            return;
+        }
 
         // The edge strip is always visible, even when the panel beside it is collapsed.
         Panel::left("bestterm_sidebar_strip")

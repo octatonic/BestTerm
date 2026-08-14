@@ -12,6 +12,9 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# First time the session model reaches the executable: the Session settings dialog
+# produces a `ProtocolConfig`, and this crate is what receives it.
+bestterm-core-model.workspace = true
 bestterm-core-pty.workspace = true
 bestterm-core-terminal.workspace = true
 bestterm-term-render.workspace = true

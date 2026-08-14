@@ -320,6 +320,26 @@ no structural difference.
 - [ ] Keyboard: every shortcut in the reference does the same thing here
 - [ ] Screenshot diff tests green (`cargo test -p bestterm-ui-chrome`)
 
+## Capturing a state without touching the mouse
+
+Parity is judged by comparing screenshots, and a screenshot of the session dialog needs the session
+dialog open. Driving synthetic clicks at a desktop to get there is unreliable — Windows refuses
+`SetForegroundWindow` from a background process, so a capture can silently end up showing whatever
+window was underneath — and it is rude to somebody who is using the machine.
+
+So the state is nameable:
+
+```sh
+BESTTERM_UI_STATE=session-dialog bestterm
+BESTTERM_UI_STATE=tools bestterm
+BESTTERM_UI_STATE=macros bestterm
+```
+
+Captures are taken with `PrintWindow` and the `PW_RENDERFULLCONTENT` flag, which renders the window
+itself rather than reading the screen, so an overlapping window cannot contaminate the result. Both
+halves of that are worth keeping: the first capture attempt in this project produced a screenshot of an
+unrelated chat application and very nearly got reported as evidence.
+
 ## Automated enforcement
 
 `ui-chrome` carries screenshot tests that render each chrome element at fixed sizes and compare

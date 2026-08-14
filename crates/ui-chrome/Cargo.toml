@@ -12,4 +12,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# The dialog produces a real `ProtocolConfig` rather than a parallel type of its own, so the
+# session model has exactly one definition. See src/session_dialog.rs.
+bestterm-core-model.workspace = true
 egui.workspace = true
