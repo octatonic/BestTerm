@@ -56,6 +56,8 @@ pub struct BestTermApp {
     /// It cannot happen in the constructor: a tab needs something to wake when its output arrives,
     /// and that only exists once there is an interface. See [`BestTermApp::open_shell`].
     opened_first_shell: bool,
+    /// What the command line asked for, acted on once the window exists.
+    startup: Startup,
     /// The Session settings dialog, whether or not it is on screen.
     dialog: SessionDialog,
     /// Where network work happens.
@@ -83,12 +85,29 @@ impl Default for BestTermApp {
     }
 }
 
+/// A session named on the command line.
+///
+/// MobaXterm can be told to open a session when it starts, and a terminal that cannot is a terminal
+/// people have to click through every morning. It is also the only way to exercise the connection path
+/// without driving synthetic input, which is what makes the screenshot tests in `docs/ui-parity.md`
+/// possible at all.
+#[derive(Clone, Debug, Default)]
+pub struct Startup {
+    /// `user@host:port` to open once the window exists.
+    pub connect: Option<String>,
+}
+
 impl BestTermApp {
     /// Build the application.
     ///
     /// No tab is opened here. Opening one needs something to wake when its output arrives, and that
     /// only exists once the interface does — so the first shell opens on the first frame instead.
     pub fn new() -> Self {
+        Self::with_startup(Startup::default())
+    }
+
+    /// Build the application, opening whatever the command line asked for.
+    pub fn with_startup(startup: Startup) -> Self {
         let shells = discover();
         tracing::info!(count = shells.len(), "discovered local shells");
 
@@ -106,6 +125,7 @@ impl BestTermApp {
             palette: Palette::xterm(),
             theme_installed: false,
             opened_first_shell: false,
+            startup,
             dialog: SessionDialog::default(),
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -366,6 +386,9 @@ impl BestTermApp {
         egui::Window::new("Messages")
             .collapsible(false)
             .resizable(false)
+            // Anchored low and centred. egui's default placement put it over the ribbon, covering the
+            // controls somebody reads an error and then reaches for.
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -32.0))
             .show(ctx, |ui| {
                 for notice in &self.notices {
                     ui.label(notice);
@@ -384,6 +407,18 @@ impl BestTermApp {
     ///
     /// Runs once, on the first frame, after the initial shell has opened so that a capture shows the
     /// requested state over a real session rather than an empty window.
+    fn apply_startup(&mut self, ctx: &egui::Context) {
+        let Some(target) = self.startup.connect.take() else {
+            return;
+        };
+        match parse_quick_connect(&target) {
+            Some(config) => self.connect_ssh(config, ctx),
+            None => self
+                .notices
+                .push(format!("could not read '{target}' as user@host:port")),
+        }
+    }
+
     fn apply_requested_state(&mut self) {
         let Ok(state) = std::env::var(UI_STATE_VARIABLE) else {
             return;
@@ -577,6 +612,7 @@ impl eframe::App for BestTermApp {
             self.opened_first_shell = true;
             self.open_shell(0, &ctx);
             self.apply_requested_state();
+            self.apply_startup(&ctx);
         }
 
         self.drain_sessions(&ctx);

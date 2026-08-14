@@ -223,6 +223,10 @@ impl SshConnection {
                 Err(SshError::Ssh(russh::Error::UnknownKey)) => {
                     return Err(SshError::HostKeyRejected);
                 }
+                // A refused or unreachable socket is not an SSH problem, and calling it one sends
+                // whoever reads the message to check their SSH configuration when the actual answer is
+                // that nothing is listening. `russh` wraps it, so it has to be unwrapped here.
+                Err(SshError::Ssh(russh::Error::IO(error))) => return Err(SshError::Io(error)),
                 Err(other) => return Err(other),
             };
 
@@ -313,6 +317,7 @@ impl SshConnection {
             Err(SshError::Ssh(russh::Error::UnknownKey)) => {
                 return Err(SshError::HostKeyRejected);
             }
+            Err(SshError::Ssh(russh::Error::IO(error))) => return Err(SshError::Io(error)),
             Err(other) => return Err(other),
         };
 

@@ -6,7 +6,7 @@
 // because that is where the log goes during development.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use bestterm_app_ui::{BestTermApp, DEFAULT_WINDOW_SIZE};
+use bestterm_app_ui::{BestTermApp, DEFAULT_WINDOW_SIZE, Startup};
 
 /// Smallest window that still shows a usable grid alongside the chrome.
 const MIN_WINDOW_SIZE: [f32; 2] = [720.0, 460.0];
@@ -15,6 +15,8 @@ fn main() -> eframe::Result {
     init_tracing();
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting BestTerm");
+
+    let startup = parse_arguments();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -27,8 +29,30 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "BestTerm",
         options,
-        Box::new(|_cc| Ok(Box::new(BestTermApp::new()))),
+        Box::new(move |_cc| Ok(Box::new(BestTermApp::with_startup(startup)))),
     )
+}
+
+/// Read the command line.
+///
+/// One positional argument, a session to open: `bestterm admin@srv.int:2222`. Anything unrecognised is
+/// reported and ignored rather than refused, because a terminal that will not start because of a typo
+/// in its arguments is worse than one that starts without the session.
+fn parse_arguments() -> Startup {
+    let mut startup = Startup::default();
+    for argument in std::env::args().skip(1) {
+        if argument.starts_with('-') {
+            tracing::warn!(argument, "unknown option; ignored");
+        } else if startup.connect.is_none() {
+            startup.connect = Some(argument);
+        } else {
+            tracing::warn!(
+                argument,
+                "only one session can be opened from the command line"
+            );
+        }
+    }
+    startup
 }
 
 /// Set up logging.
