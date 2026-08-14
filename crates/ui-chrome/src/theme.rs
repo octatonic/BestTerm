@@ -83,11 +83,17 @@ impl ChromeTheme {
             tab_active_bg: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             tab_inactive_bg: Color32::from_rgb(0xE2, 0xE2, 0xE2),
 
-            ribbon_height: 58.0,
-            ribbon_button_width: 56.0,
+            // Measured from MobaXterm Professional 26.4.0.5512; see docs/ui-parity.md. The three
+            // top bands together occupy 99 px in the reference, and the numbers below add up to
+            // that: an 18 px menu bar, a 57 px ribbon and a 24 px row for quick connect and tabs.
+            ribbon_height: 57.0,
+            ribbon_button_width: 57.0,
             quick_connect_height: 24.0,
-            sidebar_strip_width: 22.0,
-            sidebar_width: 220.0,
+            // 35 px of strip, then a hairline, then 299 px of panel -- which is 336 in total, and the
+            // reference's own settings file says SidebarWidth=336. The only figure here with
+            // independent confirmation.
+            sidebar_strip_width: 35.0,
+            sidebar_width: 299.0,
             sidebar_min_width: 120.0,
             tab_bar_height: 24.0,
             status_bar_height: 20.0,

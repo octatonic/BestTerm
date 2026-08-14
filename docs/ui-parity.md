@@ -265,13 +265,29 @@ Sessions panel contents:
 
 ### Session dialog
 
-The largest single piece of UI work in the project: a tabbed dialog per protocol with dozens of
-fields each. Enumerate exhaustively per protocol — SSH, RDP, VNC, SFTP, FTP, Telnet, Serial, Shell,
-Browser, Mosh, WSL — recording for every field: label, control type, default, validation, tooltip,
-and the `.mxtsessions` key it maps to.
+Measured. Fifteen protocol tabs, their basic fields, their secondary tabs and their description lines
+are in [`ui-parity/session-dialog.md`](ui-parity/session-dialog.md). What remains is the contents of
+each protocol's Advanced / Terminal / Network / Bookmark tab, which is where the "dozens of fields"
+live.
 
-Track it in a companion file per protocol (`docs/ui-parity/session-dialog-ssh.md`, …) rather than
-inflating this document.
+Three things the measurement settled that guesswork had wrong:
+
+* Fifteen protocols, not the eleven this document listed. `Rsh`, `Xdmcp`, `File` and `Aws S3` were
+  missing from it entirely.
+* Which secondary tabs a protocol gets follows a rule rather than being uniform: `Terminal settings`
+  only where there is a character stream, `Network settings` only for SSH, Telnet, RDP and VNC.
+* `Shell` has no `Terminal settings` tab and `SFTP` has no `Network settings` tab. Both look like
+  oversights in the reference and both are reproduced until shown otherwise.
+
+### Sidebar panels
+
+Measured. Three panels, their icons and their full contents are in
+[`ui-parity/sidebar-panels.md`](ui-parity/sidebar-panels.md).
+
+The correction that mattered: there are **three**, not four. This project had `Sftp` as a fourth,
+because the older strip did; the file browser docks inside a session tab instead. And the Tools panel's
+nineteen entries are now enumerated, which is the authoritative scope for the tool set that
+`ROADMAP.md` phase 7 exists to build.
 
 ### Theme
 

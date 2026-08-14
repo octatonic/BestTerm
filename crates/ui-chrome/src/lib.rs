@@ -36,13 +36,15 @@ pub enum SidebarPanel {
     Tools,
     /// Recorded macros.
     Macros,
-    /// The file browser for the active session.
-    Sftp,
 }
 
 impl SidebarPanel {
     /// Every panel, in display order.
-    pub const ALL: [Self; 4] = [Self::Sessions, Self::Tools, Self::Macros, Self::Sftp];
+    ///
+    /// Three, measured by opening each one in the reference. There was a fourth here, `Sftp`, added
+    /// because the older MobaXterm strip had it -- the file browser is not a sidebar panel at all, it
+    /// docks inside a session tab. See `docs/ui-parity/sidebar-panels.md`.
+    pub const ALL: [Self; 3] = [Self::Sessions, Self::Tools, Self::Macros];
 
     /// The label shown on the edge strip.
     pub fn label(self) -> &'static str {
@@ -50,8 +52,93 @@ impl SidebarPanel {
             Self::Sessions => "Sessions",
             Self::Tools => "Tools",
             Self::Macros => "Macros",
-            Self::Sftp => "Sftp",
         }
+    }
+}
+
+/// The Tools panel, as measured from the reference: entries under category headers.
+///
+/// Held as data rather than drawn inline so that this list and
+/// `docs/ui-parity/sidebar-panels.md` cannot drift apart without one of them looking wrong.
+///
+/// Two of the reference's entries are deliberately absent rather than present and inert:
+///
+/// * `MobApt packages manager` manages MobaXterm's bundled Cygwin environment, which
+///   `docs/ARCHITECTURE.md` lists as a permanent non-goal. Unlike the `Packages` ribbon button, whose
+///   slot is kept so the ribbon's shape stays recognisable, a tool that can never do anything is worth
+///   less than the space it takes.
+/// * The three `X11 … with Jwm / Twm` entries are X server launch modes and belong with that work
+///   rather than with the tools; they arrive together with the X server or not at all.
+const TOOLS: &[(&str, &[&str])] = &[
+    (
+        "System",
+        &[
+            "List hardware devices",
+            "List running processes",
+            "Command Prompt (admin)",
+            "Windows Powershell (admin)",
+        ],
+    ),
+    ("Office", &["Text editor", "Compare files", "Ascii table"]),
+    (
+        "Network",
+        &[
+            "Network services",
+            "Tunnel manager (port forwarding)",
+            "SSH key generator",
+            "List open network ports",
+            "Wake On Lan",
+            "Network scanner",
+            "Ports scanner",
+            "Network packets capture",
+        ],
+    ),
+];
+
+/// The Macros panel, as measured.
+const MACROS: &[&str] = &["Record new macro", "Saved macros"];
+
+/// Draw the Tools panel.
+///
+/// Every entry reports [`ChromeAction::Unimplemented`] for now. The names are the deliverable at this
+/// stage: somebody comparing this against the reference is comparing lists, and a panel that said
+/// "Tools" told them nothing.
+pub fn tools_panel(ui: &mut Ui, theme: &ChromeTheme, actions: &mut Vec<ChromeAction>) {
+    for (category, entries) in TOOLS {
+        category_header(ui, theme, category);
+        for entry in *entries {
+            if ui.selectable_label(false, *entry).clicked() {
+                actions.push(ChromeAction::Unimplemented(entry));
+            }
+        }
+    }
+}
+
+/// Draw the Macros panel.
+pub fn macros_panel(ui: &mut Ui, theme: &ChromeTheme, actions: &mut Vec<ChromeAction>) {
+    let _ = theme;
+    for entry in MACROS {
+        if ui.selectable_label(false, *entry).clicked() {
+            actions.push(ChromeAction::Unimplemented(entry));
+        }
+    }
+}
+
+/// A full-width bar with centred text, which is how the reference separates the tool categories.
+fn category_header(ui: &mut Ui, theme: &ChromeTheme, text: &str) {
+    let height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::ZERO, theme.selected_bg);
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            egui::TextStyle::Body.resolve(ui.style()),
+            theme.text,
+        );
     }
 }
 
@@ -61,7 +148,7 @@ pub struct TabInfo {
     /// Text shown on the tab.
     ///
     /// The session's own name, not whatever the program running inside it last set. A shell that
-    /// announces itself as `C:\Windows\System32\WindowsPowerShell1.0\powershell.exe` -- which is
+    /// announces itself as `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` -- which is
     /// exactly what PowerShell does -- would otherwise fill the tab bar with one tab.
     pub title: String,
     /// What the program inside set as its title, when it set one and it differs from `title`.
@@ -626,9 +713,38 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_panels_are_in_the_reference_order() {
+    fn there_are_three_sidebar_panels_in_the_measured_order() {
+        // Three, from opening each one in the reference. This asserted four -- the fourth being
+        // `Sftp`, which the older strip had and 26.4 does not. The file browser docks inside a session
+        // tab; it is not a sidebar panel. See `docs/ui-parity/sidebar-panels.md`.
         let labels: Vec<&str> = SidebarPanel::ALL.iter().map(|p| p.label()).collect();
-        assert_eq!(labels, vec!["Sessions", "Tools", "Macros", "Sftp"]);
+        assert_eq!(labels, vec!["Sessions", "Tools", "Macros"]);
+    }
+
+    #[test]
+    fn the_tools_panel_lists_what_was_measured_under_the_categories_it_was_measured_under() {
+        // The panel's value at this stage is the list, so the list is worth asserting. Categories in
+        // the reference's order; entries within them likewise.
+        let categories: Vec<&str> = TOOLS.iter().map(|(name, _)| *name).collect();
+        assert_eq!(categories, vec!["System", "Office", "Network"]);
+
+        let network = TOOLS
+            .iter()
+            .find(|(name, _)| *name == "Network")
+            .map(|(_, entries)| *entries)
+            .expect("a Network category");
+        assert!(network.contains(&"SSH key generator"));
+        assert!(network.contains(&"Tunnel manager (port forwarding)"));
+        assert!(network.contains(&"Wake On Lan"));
+
+        // Deliberately absent rather than present and inert; the reasons are on `TOOLS`.
+        let every: Vec<&str> = TOOLS
+            .iter()
+            .flat_map(|(_, entries)| entries.iter().copied())
+            .collect();
+        assert!(!every.iter().any(|entry| entry.contains("MobApt")));
+        assert!(!every.iter().any(|entry| entry.contains("Jwm")));
+        assert!(!every.iter().any(|entry| entry.contains("Twm")));
     }
 
     #[test]

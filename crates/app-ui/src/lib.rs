@@ -12,7 +12,8 @@ use bestterm_term_render::{TerminalMetrics, TerminalStyle};
 use bestterm_transport::GridSize;
 use bestterm_ui_chrome::{
     ChromeAction, ChromeState, ChromeTheme, SidebarPanel, StatusInfo, TabInfo, apply_theme,
-    menu_bar, quick_connect_field, ribbon, sidebar_strip, status_bar, tab_bar,
+    macros_panel, menu_bar, quick_connect_field, ribbon, sidebar_strip, status_bar, tab_bar,
+    tools_panel,
 };
 use egui::{CentralPanel, CornerRadius, EventFilter, Frame, Panel, Sense, Stroke};
 
@@ -364,7 +365,9 @@ impl eframe::App for BestTermApp {
                 .default_size(theme.sidebar_width)
                 .min_size(theme.sidebar_min_width)
                 .frame(chrome_frame(theme.chrome_bg))
-                .show(ui, |ui| requested_shell = self.sidebar_contents(ui));
+                .show(ui, |ui| {
+                    requested_shell = self.sidebar_contents(ui, &mut actions)
+                });
         }
 
         CentralPanel::no_frame().show(ui, |ui| self.terminal_ui(ui));
@@ -393,7 +396,11 @@ impl BestTermApp {
     ///
     /// Returned rather than opened here: this runs inside a closure that already holds `&mut self`,
     /// and opening a tab needs the interface context, which the caller has.
-    fn sidebar_contents(&mut self, ui: &mut egui::Ui) -> Option<usize> {
+    fn sidebar_contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        actions: &mut Vec<ChromeAction>,
+    ) -> Option<usize> {
         match self.chrome.sidebar_panel {
             SidebarPanel::Sessions => {
                 ui.label(egui::RichText::new("User sessions").strong());
@@ -419,20 +426,11 @@ impl BestTermApp {
                 requested
             }
             SidebarPanel::Tools => {
-                ui.label("Tools");
+                tools_panel(ui, &self.theme, actions);
                 None
             }
             SidebarPanel::Macros => {
-                ui.label("Macros");
-                None
-            }
-            SidebarPanel::Sftp => {
-                ui.label("Sftp");
-                ui.label(
-                    egui::RichText::new("The file browser arrives in phase 4.")
-                        .small()
-                        .color(self.theme.text_dim),
-                );
+                macros_panel(ui, &self.theme, actions);
                 None
             }
         }
