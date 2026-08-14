@@ -6,6 +6,8 @@
 mod ssh;
 mod tab;
 
+use bestterm_config::ConfigStore;
+use bestterm_core_model::{NodeId, NodeKind, ProtocolConfig, SessionTree};
 use bestterm_core_pty::{ShellProfile, discover};
 use bestterm_core_terminal::{Palette, TerminalEmulator};
 use bestterm_term_render::keys::{self, TermKey};
@@ -58,6 +60,14 @@ pub struct BestTermApp {
     opened_first_shell: bool,
     /// What the command line asked for, acted on once the window exists.
     startup: Startup,
+    /// Where configuration lives, or `None` when no home directory could be found.
+    ///
+    /// Absent is survivable: the application runs and forgets, which is better than refusing to start
+    /// because a directory could not be created.
+    store: Option<ConfigStore>,
+    /// Saved sessions.
+    tree: SessionTree,
+
     /// The Session settings dialog, whether or not it is on screen.
     dialog: SessionDialog,
     /// Where network work happens.
@@ -95,6 +105,8 @@ impl Default for BestTermApp {
 pub struct Startup {
     /// `user@host:port` to open once the window exists.
     pub connect: Option<String>,
+    /// A `.mxtsessions` file to import into the session tree.
+    pub import: Option<std::path::PathBuf>,
 }
 
 impl BestTermApp {
@@ -111,6 +123,22 @@ impl BestTermApp {
         let shells = discover();
         tracing::info!(count = shells.len(), "discovered local shells");
 
+        let store = bestterm_config::Paths::discover().map(ConfigStore::new);
+        let tree = match &store {
+            Some(store) => match store.load_tree() {
+                Ok(tree) => tree,
+                Err(error) => {
+                    // A tree that cannot be read is reported and replaced with an empty one rather
+                    // than being fatal: somebody with a corrupt file still needs a terminal, and
+                    // nothing here overwrites the file until they change something.
+                    tracing::warn!(%error, "could not read the saved sessions");
+                    SessionTree::new()
+                }
+            },
+            None => SessionTree::new(),
+        };
+        tracing::info!(sessions = tree.walk().len(), "loaded the session tree");
+
         Self {
             theme: ChromeTheme::light(),
             term_style: TerminalStyle::default(),
@@ -126,6 +154,8 @@ impl BestTermApp {
             theme_installed: false,
             opened_first_shell: false,
             startup,
+            store,
+            tree,
             dialog: SessionDialog::default(),
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -403,11 +433,141 @@ impl BestTermApp {
         }
     }
 
+    /// Read a `.mxtsessions` file into the tree and save it.
+    ///
+    /// Every count is reported, including the ones that are zero. An import that silently dropped a
+    /// third of somebody's inventory would be discovered weeks later, by which time they would have
+    /// stopped believing the tool.
+    fn import_mxtsessions(&mut self, path: &std::path::Path) {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.notices
+                    .push(format!("could not read {}: {error}", path.display()));
+                return;
+            }
+        };
+
+        let import = bestterm_importers::mxtsessions::parse(&bytes);
+        let ids = import.tree.walk();
+        let sessions = ids
+            .iter()
+            .filter(|id| {
+                import
+                    .tree
+                    .get(**id)
+                    .is_some_and(|node| !node.kind.is_folder())
+            })
+            .count();
+
+        // Secrets found in clear text are deliberately not taken. They belong in the vault, which is
+        // not wired into the interface yet, and holding them anywhere else -- even in memory, even
+        // briefly -- would be the wrong habit to start.
+        if !import.secrets.is_empty() {
+            self.notices.push(format!(
+                "{} stored password(s) were left behind: the vault is not wired up yet",
+                import.secrets.len()
+            ));
+        }
+        if !import.skipped.is_empty() {
+            self.notices
+                .push(format!("{} entries were skipped", import.skipped.len()));
+        }
+
+        self.tree = import.tree;
+        self.notices.push(format!(
+            "imported {sessions} session(s) from {}",
+            path.display()
+        ));
+        self.save_tree();
+    }
+
+    /// Write the session tree, reporting a failure rather than losing it quietly.
+    fn save_tree(&mut self) {
+        let Some(store) = &self.store else {
+            self.notices
+                .push("no configuration directory: sessions will not be remembered".to_string());
+            return;
+        };
+        if let Err(error) = store.save_tree(&self.tree) {
+            self.notices
+                .push(format!("could not save the sessions: {error}"));
+        }
+    }
+
+    /// Draw the saved session tree, returning a session somebody asked to open.
+    fn session_tree(&mut self, ui: &mut egui::Ui) -> Option<NodeId> {
+        let roots: Vec<NodeId> = self.tree.roots().to_vec();
+        if roots.is_empty() {
+            ui.label(
+                egui::RichText::new(
+                    "No saved sessions. Import a .mxtsessions file to bring some in.",
+                )
+                .small()
+                .color(self.theme.text_dim),
+            );
+            return None;
+        }
+        let mut requested = None;
+        for id in roots {
+            self.session_node(ui, id, &mut requested);
+        }
+        requested
+    }
+
+    /// Draw one node and, for a folder, its children.
+    fn session_node(&mut self, ui: &mut egui::Ui, id: NodeId, requested: &mut Option<NodeId>) {
+        let Some(node) = self.tree.get(id) else {
+            return;
+        };
+        let name = node.name.clone();
+
+        if node.kind.is_folder() {
+            let children: Vec<NodeId> = node.children().to_vec();
+            // egui's own collapsing header, because it paints its triangle with the painter rather
+            // than with a glyph. The first version used `▸` and `▾`, which the bundled font does not
+            // have, so every folder in the tree was marked with an empty box.
+            egui::CollapsingHeader::new(name)
+                .id_salt(id)
+                .default_open(false)
+                .show(ui, |ui| {
+                    for child in children {
+                        self.session_node(ui, child, requested);
+                    }
+                });
+        } else if ui.selectable_label(false, name).double_clicked() {
+            *requested = Some(id);
+        }
+    }
+
+    /// Open the session a tree node describes.
+    fn open_saved_session(&mut self, id: NodeId, ctx: &egui::Context) {
+        let Some(node) = self.tree.get(id) else {
+            return;
+        };
+        match &node.kind {
+            NodeKind::Session { config } => match config.as_ref() {
+                ProtocolConfig::Ssh(ssh) => {
+                    let ssh = ssh.clone();
+                    self.connect_ssh(ssh, ctx);
+                }
+                other => self.notices.push(format!(
+                    "{} sessions cannot be opened yet",
+                    other.protocol().id()
+                )),
+            },
+            NodeKind::Folder { .. } => {}
+        }
+    }
+
     /// Put the interface into the state [`UI_STATE_VARIABLE`] asked for, if it asked for one.
     ///
     /// Runs once, on the first frame, after the initial shell has opened so that a capture shows the
     /// requested state over a real session rather than an empty window.
     fn apply_startup(&mut self, ctx: &egui::Context) {
+        if let Some(path) = self.startup.import.take() {
+            self.import_mxtsessions(&path);
+        }
         let Some(target) = self.startup.connect.take() else {
             return;
         };
@@ -622,6 +782,7 @@ impl eframe::App for BestTermApp {
         let mut actions: Vec<ChromeAction> = Vec::new();
         // Filled by the left panel, acted on after it has finished drawing.
         let mut requested_shell: Option<usize> = None;
+        let mut requested_session: Option<NodeId> = None;
 
         // Cloned once per frame so the panel closures below borrow a local rather than `self`,
         // which would otherwise conflict with the two closures that need `&mut self`. The theme is
@@ -691,7 +852,8 @@ impl eframe::App for BestTermApp {
                 .min_size(theme.sidebar_min_width)
                 .frame(chrome_frame(theme.chrome_bg))
                 .show(ui, |ui| {
-                    requested_shell = self.sidebar_contents(ui, &mut actions)
+                    requested_shell =
+                        self.sidebar_contents(ui, &mut actions, &mut requested_session)
                 });
         }
 
@@ -704,6 +866,9 @@ impl eframe::App for BestTermApp {
 
         if let Some(index) = requested_shell {
             self.open_shell(index, &ctx);
+        }
+        if let Some(id) = requested_session {
+            self.open_saved_session(id, &ctx);
         }
 
         self.apply_actions(actions, &ctx);
@@ -730,10 +895,17 @@ impl BestTermApp {
         &mut self,
         ui: &mut egui::Ui,
         actions: &mut Vec<ChromeAction>,
+        requested_session: &mut Option<NodeId>,
     ) -> Option<usize> {
         match self.chrome.sidebar_panel {
             SidebarPanel::Sessions => {
                 ui.label(egui::RichText::new("User sessions").strong());
+                ui.separator();
+                if let Some(id) = self.session_tree(ui) {
+                    *requested_session = Some(id);
+                }
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Local shells").strong());
                 ui.separator();
                 let shells: Vec<(usize, String)> = self
                     .shells
@@ -747,12 +919,6 @@ impl BestTermApp {
                         requested = Some(index);
                     }
                 }
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new("Saved sessions arrive in phase 2.")
-                        .small()
-                        .color(self.theme.text_dim),
-                );
                 requested
             }
             SidebarPanel::Tools => {

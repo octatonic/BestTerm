@@ -35,13 +35,20 @@ fn main() -> eframe::Result {
 
 /// Read the command line.
 ///
-/// One positional argument, a session to open: `bestterm admin@srv.int:2222`. Anything unrecognised is
-/// reported and ignored rather than refused, because a terminal that will not start because of a typo
-/// in its arguments is worse than one that starts without the session.
+/// One positional argument, a session to open: `bestterm admin@srv.int:2222`, and one option,
+/// `--import <file>`, which reads a `.mxtsessions` export into the session tree. Anything unrecognised
+/// is reported and ignored rather than refused, because a terminal that will not start because of a
+/// typo in its arguments is worse than one that starts without the session.
 fn parse_arguments() -> Startup {
     let mut startup = Startup::default();
-    for argument in std::env::args().skip(1) {
-        if argument.starts_with('-') {
+    let mut arguments = std::env::args().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--import" {
+            match arguments.next() {
+                Some(path) => startup.import = Some(std::path::PathBuf::from(path)),
+                None => tracing::warn!("--import needs a path"),
+            }
+        } else if argument.starts_with('-') {
             tracing::warn!(argument, "unknown option; ignored");
         } else if startup.connect.is_none() {
             startup.connect = Some(argument);

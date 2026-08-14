@@ -298,9 +298,11 @@ dependencies = [
 name = "bestterm-app-ui"
 version = "0.1.0"
 dependencies = [
+ "bestterm-config",
  "bestterm-core-model",
  "bestterm-core-pty",
  "bestterm-core-terminal",
+ "bestterm-importers",
  "bestterm-proto-ssh",
  "bestterm-term-render",
  "bestterm-transport",
