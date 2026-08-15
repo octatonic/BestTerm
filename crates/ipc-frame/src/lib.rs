@@ -36,9 +36,11 @@
 pub mod codec;
 pub mod message;
 pub mod shared;
+pub mod wire;
 
 pub use codec::{CodecError, CodecResult, MAX_FIELD_LEN};
 pub use message::{
     ConnectRequest, FrameReady, HelperMessage, HostMessage, MAX_MESSAGE_LEN, PROTOCOL_VERSION,
 };
 pub use shared::{SLOT_COUNT, SharedFrames};
+pub use wire::{read_message, write_message};

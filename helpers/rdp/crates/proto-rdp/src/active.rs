@@ -91,6 +91,19 @@ pub enum Update {
     },
 }
 
+/// One protocol data unit, read but not yet acted on.
+///
+/// Opaque on purpose: the pair of an action and its bytes means something only to IronRDP, and the
+/// point of naming it is to make the gap between reading and processing something a caller can hold
+/// rather than something it has to reconstruct.
+#[derive(Debug)]
+pub struct Pdu {
+    /// Which framing the payload uses.
+    action: ironrdp_pdu::Action,
+    /// The complete PDU, header included.
+    payload: ironrdp_tokio::bytes::BytesMut,
+}
+
 /// A framebuffer, described.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameLayout {
@@ -203,14 +216,39 @@ impl ActiveSession {
         &self.label
     }
 
+    /// Wait for one PDU from the server.
+    ///
+    /// Cancel-safe: dropping this future loses nothing, because IronRDP's own reader only removes
+    /// bytes from its buffer once a whole PDU is there. That is what makes it usable as a branch of
+    /// a `select!` against a control channel — which is the whole reason reading and processing are
+    /// two calls rather than one. See [`ActiveSession::pump`].
+    pub async fn read(&mut self) -> Result<Pdu, RdpError> {
+        let (action, payload) = self.stream.read_pdu().await?;
+        Ok(Pdu { action, payload })
+    }
+
     /// Read one PDU and act on it.
     ///
     /// Returns everything that one PDU produced, which is usually nothing at all: RDP sends frame
     /// markers and flow-control traffic between the PDUs that carry pixels, and those produce an
     /// acknowledgement and an empty result. A caller loops on this until it sees
     /// [`Update::Closed`].
+    ///
+    /// **Not cancel-safe.** Dropping this future part-way through discards a PDU that has already
+    /// been taken off the stream, and with it whatever pixels it carried and whatever
+    /// acknowledgement it owed the server. A caller that needs to wait on something else at the same
+    /// time must use [`ActiveSession::read`] in the `select!` and call
+    /// [`ActiveSession::process`] on the result afterwards, outside it.
     pub async fn pump(&mut self) -> Result<Vec<Update>, RdpError> {
-        let (action, payload) = self.stream.read_pdu().await?;
+        let pdu = self.read().await?;
+        self.process(pdu).await
+    }
+
+    /// Act on a PDU that [`ActiveSession::read`] returned.
+    ///
+    /// Must not be abandoned once started, for the reason given on [`ActiveSession::pump`].
+    pub async fn process(&mut self, pdu: Pdu) -> Result<Vec<Update>, RdpError> {
+        let Pdu { action, payload } = pdu;
         let outputs = self
             .stage
             .process(&mut self.image, action, &payload)

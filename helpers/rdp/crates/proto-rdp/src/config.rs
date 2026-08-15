@@ -193,6 +193,7 @@ mod tests {
             enable_credssp: true,
             keyboard_layout: 0x0409,
             client_name: "bestterm".to_string(),
+            known_server_key: None,
         }
     }
 

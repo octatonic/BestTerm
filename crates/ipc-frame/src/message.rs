@@ -32,6 +32,7 @@ const HOST_CONNECT: u8 = 1;
 const HOST_INPUT: u8 = 2;
 const HOST_RESIZE: u8 = 3;
 const HOST_SHUTDOWN: u8 = 4;
+const HOST_SERVER_KEY_ANSWER: u8 = 5;
 
 const HELPER_READY: u8 = 1;
 const HELPER_FRAME: u8 = 2;
@@ -40,6 +41,8 @@ const HELPER_CURSOR: u8 = 4;
 const HELPER_CLIPBOARD: u8 = 5;
 const HELPER_CLOSED: u8 = 6;
 const HELPER_ERROR: u8 = 7;
+const HELPER_ASK_SERVER_KEY: u8 = 8;
+const HELPER_SERVER_KEY: u8 = 9;
 
 const INPUT_KEY: u8 = 1;
 const INPUT_TEXT: u8 = 2;
@@ -76,6 +79,20 @@ pub struct ConnectRequest {
     pub keyboard_layout: u32,
     /// Name the session appears under in the server's logs.
     pub client_name: String,
+    /// The key already recorded for this server, if there is one.
+    ///
+    /// The store lives with the host, because it is configuration and because a trust decision
+    /// belongs where the person is. What the helper needs is only the answer to "is this the machine
+    /// I saw last time", so what crosses is the one fingerprint that question turns on -- and the
+    /// helper can then tell `Trusted` from `Changed` without being handed the whole store.
+    ///
+    /// `None` means nothing is on record, which is not the same as "accept anything": the helper
+    /// asks, with [`HelperMessage::AskAboutServerKey`].
+    ///
+    /// The digest in hexadecimal, the form [`HelperMessage::ServerKey`] hands back. Not the form
+    /// shown to a person -- that one has separators in it and exists to be read aloud, and a
+    /// comparison is not the place for either.
+    pub known_server_key: Option<String>,
 }
 
 impl std::fmt::Debug for ConnectRequest {
@@ -91,6 +108,7 @@ impl std::fmt::Debug for ConnectRequest {
             .field("domain", &self.domain)
             .field("desktop_size", &self.desktop_size)
             .field("enable_credssp", &self.enable_credssp)
+            .field("pinned", &self.known_server_key.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -121,6 +139,15 @@ pub enum HostMessage {
     Resize(FrameSize),
     /// Close the session and exit.
     Shutdown,
+    /// What was decided about the key the helper asked about.
+    ///
+    /// Sent in reply to [`HelperMessage::AskAboutServerKey`] and at no other time. Only one answer
+    /// is ever wanted, and the helper is holding a handshake open waiting for it -- with the
+    /// server's password still on this side of the wire.
+    ServerKeyAnswer {
+        /// Whether to carry on with this server.
+        accept: bool,
+    },
 }
 
 /// Helper to host.
@@ -152,6 +179,36 @@ pub enum HelperMessage {
     },
     /// Something went wrong that the session survived.
     Error(String),
+    /// The server presented a key that is not settled, and the handshake is waiting on an answer.
+    ///
+    /// This arrives *before* any credential has been sent, which is the whole point of it: after
+    /// that moment the password is already on the wire and asking is theatre. The helper is blocked
+    /// until [`HostMessage::ServerKeyAnswer`] arrives or it gives up.
+    AskAboutServerKey {
+        /// Which server, as the request named it.
+        host: String,
+        /// And on which port.
+        port: u16,
+        /// The key presented, in the form meant to be read by a person and compared aloud.
+        fingerprint: String,
+        /// The key that was on record, in the same readable form, when there was one and it did
+        /// not match.
+        ///
+        /// `Some` is the serious case: something is answering for this address that was not
+        /// answering for it before. `None` means simply that this server has not been seen.
+        expected: Option<String>,
+    },
+    /// The key this session settled on, and whether it is worth writing down.
+    ///
+    /// Sent once, after the key is accepted and before any frame. The host owns the store, so this
+    /// is how anything gets into it.
+    ServerKey {
+        /// The digest in hexadecimal, which is what goes into the store and what comes back as
+        /// [`ConnectRequest::known_server_key`] next time.
+        fingerprint: String,
+        /// False when it was already on record and nothing needs changing.
+        store: bool,
+    },
 }
 
 impl HostMessage {
@@ -170,6 +227,7 @@ impl HostMessage {
                 out.put_bool(request.enable_credssp);
                 out.put_u32(request.keyboard_layout);
                 out.put_str(&request.client_name);
+                put_option_str(&mut out, request.known_server_key.as_deref());
             }
             Self::Input(input) => {
                 out.put_u8(HOST_INPUT);
@@ -180,6 +238,10 @@ impl HostMessage {
                 put_size(&mut out, *size);
             }
             Self::Shutdown => out.put_u8(HOST_SHUTDOWN),
+            Self::ServerKeyAnswer { accept } => {
+                out.put_u8(HOST_SERVER_KEY_ANSWER);
+                out.put_bool(*accept);
+            }
         }
         out
     }
@@ -207,10 +269,12 @@ impl HostMessage {
                 enable_credssp: d.bool()?,
                 keyboard_layout: d.u32()?,
                 client_name: d.string()?,
+                known_server_key: take_option_str(d)?,
             }))),
             HOST_INPUT => Ok(Self::Input(take_input(d)?)),
             HOST_RESIZE => Ok(Self::Resize(take_size(d)?)),
             HOST_SHUTDOWN => Ok(Self::Shutdown),
+            HOST_SERVER_KEY_ANSWER => Ok(Self::ServerKeyAnswer { accept: d.bool()? }),
             tag => Err(CodecError::UnknownTag {
                 what: "host message",
                 tag,
@@ -270,6 +334,23 @@ impl HelperMessage {
                 out.put_u8(HELPER_ERROR);
                 out.put_str(detail);
             }
+            Self::AskAboutServerKey {
+                host,
+                port,
+                fingerprint,
+                expected,
+            } => {
+                out.put_u8(HELPER_ASK_SERVER_KEY);
+                out.put_str(host);
+                out.put_u16(*port);
+                out.put_str(fingerprint);
+                put_option_str(&mut out, expected.as_deref());
+            }
+            Self::ServerKey { fingerprint, store } => {
+                out.put_u8(HELPER_SERVER_KEY);
+                out.put_str(fingerprint);
+                out.put_bool(*store);
+            }
         }
         out
     }
@@ -325,6 +406,16 @@ impl HelperMessage {
                 reason: take_option_str(d)?,
             }),
             HELPER_ERROR => Ok(Self::Error(d.string()?)),
+            HELPER_ASK_SERVER_KEY => Ok(Self::AskAboutServerKey {
+                host: d.string()?,
+                port: d.u16()?,
+                fingerprint: d.string()?,
+                expected: take_option_str(d)?,
+            }),
+            HELPER_SERVER_KEY => Ok(Self::ServerKey {
+                fingerprint: d.string()?,
+                store: d.bool()?,
+            }),
             tag => Err(CodecError::UnknownTag {
                 what: "helper message",
                 tag,
@@ -533,7 +624,62 @@ mod tests {
             enable_credssp: true,
             keyboard_layout: 0x0409,
             client_name: "bestterm".to_string(),
+            known_server_key: Some("SHA256:abcdef".to_string()),
         }
+    }
+
+    #[test]
+    fn the_key_exchange_survives_the_round_trip() {
+        // The messages that decide whether a password is sent at all. A field lost here would be a
+        // question answered about the wrong server.
+        let asked = HelperMessage::AskAboutServerKey {
+            host: "rdp.int".to_string(),
+            port: 3389,
+            fingerprint: "SHA256:presented".to_string(),
+            expected: Some("SHA256:recorded".to_string()),
+        };
+        let HelperMessage::AskAboutServerKey {
+            host,
+            port,
+            fingerprint,
+            expected,
+        } = HelperMessage::decode(&asked.encode()).expect("decodes")
+        else {
+            panic!("expected a question about a key");
+        };
+        assert_eq!((host.as_str(), port), ("rdp.int", 3389));
+        assert_eq!(fingerprint, "SHA256:presented");
+        assert_eq!(expected.as_deref(), Some("SHA256:recorded"));
+
+        // A server not seen before is told apart from one whose key changed, because the second is
+        // the serious one.
+        let fresh = HelperMessage::AskAboutServerKey {
+            host: "rdp.int".to_string(),
+            port: 3389,
+            fingerprint: "SHA256:presented".to_string(),
+            expected: None,
+        };
+        assert!(matches!(
+            HelperMessage::decode(&fresh.encode()).expect("decodes"),
+            HelperMessage::AskAboutServerKey { expected: None, .. }
+        ));
+
+        for accept in [true, false] {
+            assert!(matches!(
+                HostMessage::decode(&HostMessage::ServerKeyAnswer { accept }.encode())
+                    .expect("decodes"),
+                HostMessage::ServerKeyAnswer { accept: back } if back == accept
+            ));
+        }
+
+        let settled = HelperMessage::ServerKey {
+            fingerprint: "SHA256:settled".to_string(),
+            store: true,
+        };
+        assert!(matches!(
+            HelperMessage::decode(&settled.encode()).expect("decodes"),
+            HelperMessage::ServerKey { store: true, .. }
+        ));
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub mod config;
 pub mod server_key;
 pub mod session;
 
-pub use active::{ActiveSession, FrameLayout, Update};
+pub use active::{ActiveSession, FrameLayout, Pdu, Update};
 pub use config::{ConfigError, MAX_DIMENSION, MIN_DIMENSION};
 pub use server_key::{KeyFingerprint, KnownServers, ServerKeyChecker, Verdict};
 pub use session::{Connected, RdpError, connect};

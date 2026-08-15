@@ -1,0 +1,28 @@
+[package]
+name = "bestterm-rdp"
+description = "The RDP helper process: speaks IronRDP on one side and BestTerm's frame protocol on the other"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "bestterm-rdp"
+path = "src/main.rs"
+
+[dependencies]
+bestterm-ipc-frame.workspace = true
+bestterm-proto-rdp.workspace = true
+bestterm-surface.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# Only the tests build a request from scratch; at run time one arrives already assembled.
+bestterm-core-vault.workspace = true

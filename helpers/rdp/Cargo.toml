@@ -19,7 +19,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["apps/*", "crates/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -47,6 +47,9 @@ authors = ["BestTerm contributors"]
 bestterm-ipc-frame = { path = "../../crates/ipc-frame", version = "0.1.0" }
 bestterm-surface = { path = "../../crates/surface", version = "0.1.0" }
 bestterm-core-vault = { path = "../../crates/core-vault", version = "0.1.0" }
+
+# ---- within this workspace ------------------------------------------------------
+bestterm-proto-rdp = { path = "crates/proto-rdp", version = "0.1.0" }
 
 # ---- IronRDP -------------------------------------------------------------------
 # MIT OR Apache-2.0, from Devolutions. Chosen over FreeRDP bindings because it is
@@ -95,6 +98,7 @@ tokio = { version = "1.53", features = [
     "macros",
 ] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [workspace.lints.rust]
 unsafe_code = "warn"
