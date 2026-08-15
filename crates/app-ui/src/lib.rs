@@ -129,7 +129,14 @@ impl BestTermApp {
         let shells = discover();
         tracing::info!(count = shells.len(), "discovered local shells");
 
-        let store = bestterm_config::Paths::discover().map(ConfigStore::new);
+        // `BESTTERM_CONFIG_DIR` puts everything under one directory. The docstring on
+        // `Paths::rooted_at` already anticipated it for portable installations; it is used here to
+        // investigate interface behaviour without a real inventory of sessions in the way.
+        let paths = match std::env::var_os("BESTTERM_CONFIG_DIR") {
+            Some(dir) => Some(bestterm_config::Paths::rooted_at(dir)),
+            None => bestterm_config::Paths::discover(),
+        };
+        let store = paths.map(ConfigStore::new);
         let tree = match &store {
             Some(store) => match store.load_tree() {
                 Ok(tree) => tree,
