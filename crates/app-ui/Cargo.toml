@@ -16,6 +16,9 @@ workspace = true
 # produces a `ProtocolConfig`, and this crate is what receives it.
 bestterm-config.workspace = true
 bestterm-core-model.workspace = true
+# The vault holds session passwords. It is opened when something needs a secret out of it,
+# never at startup: agent-only users are never asked for a master password.
+bestterm-core-vault.workspace = true
 bestterm-core-pty.workspace = true
 # Bringing an existing MobaXterm inventory across is the cheapest way to make this usable
 # on day one; see docs/ROADMAP.md.

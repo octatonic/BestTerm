@@ -196,6 +196,7 @@ impl HostKeyVerifier for PromptingVerifier {
 pub(crate) fn connect(
     runtime: &tokio::runtime::Handle,
     config: SshConfig,
+    auth: Auth,
     known_hosts_text: String,
     size: GridSize,
     events: crossbeam_channel::Sender<SessionEvent>,
@@ -219,10 +220,7 @@ pub(crate) fn connect(
             user: config.user.clone().unwrap_or_else(whoami),
         };
 
-        // The agent, always, for this first version. Password and key authentication need the vault
-        // wired into the interface, which is the next piece rather than this one; agent authentication
-        // is the case that already works without asking anybody for anything.
-        let event = match SshConnection::connect(target, Auth::Agent, known_hosts, verifier).await {
+        let event = match SshConnection::connect(target, auth, known_hosts, verifier).await {
             Ok(connection) => {
                 let record = connection
                     .host_key_outcome()

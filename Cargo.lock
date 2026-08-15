@@ -302,6 +302,7 @@ dependencies = [
  "bestterm-core-model",
  "bestterm-core-pty",
  "bestterm-core-terminal",
+ "bestterm-core-vault",
  "bestterm-importers",
  "bestterm-proto-ssh",
  "bestterm-term-render",

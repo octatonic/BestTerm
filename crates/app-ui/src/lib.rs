@@ -5,6 +5,7 @@
 
 mod ssh;
 mod tab;
+mod vault;
 
 use bestterm_config::ConfigStore;
 use bestterm_core_model::{NodeId, NodeKind, ProtocolConfig, SessionTree};
@@ -22,6 +23,7 @@ use egui::{CentralPanel, CornerRadius, EventFilter, Frame, Panel, Sense, Stroke}
 
 use crate::ssh::{HostKeyQuestion, HostKeyRecord, HostKeyVerdict, SessionEvent};
 use crate::tab::TerminalTab;
+use crate::vault::{PendingUnlock, Prompt, VaultState};
 
 /// Environment variable that puts the interface into a named state at startup.
 ///
@@ -87,6 +89,10 @@ pub struct BestTermApp {
     pending_host_key: Option<HostKeyQuestion>,
     /// Connection failures worth showing, newest last.
     notices: Vec<String>,
+    /// Stored credentials, and the state of the prompt over them.
+    vault: VaultState,
+    /// A session that was waiting for the vault to open.
+    pending_session: Option<bestterm_core_model::SshConfig>,
 }
 
 impl Default for BestTermApp {
@@ -166,6 +172,8 @@ impl BestTermApp {
             sessions: crossbeam_channel::unbounded(),
             pending_host_key: None,
             notices: Vec::new(),
+            vault: VaultState::default(),
+            pending_session: None,
         }
     }
 
@@ -255,6 +263,59 @@ impl BestTermApp {
     /// Returns immediately: a connection takes as long as a network does, and the frame loop cannot
     /// wait for one. The outcome arrives on [`Self::sessions`] and is picked up by a later frame.
     fn connect_ssh(&mut self, config: bestterm_core_model::SshConfig, ctx: &egui::Context) {
+        use bestterm_core_model::SshAuth;
+        use bestterm_proto_ssh::Auth;
+
+        // Resolved before anything is spawned, because a locked vault means asking a question rather
+        // than starting a connection that would fail on the far side of a network round trip.
+        let auth = match &config.auth {
+            SshAuth::Agent => Auth::Agent,
+            SshAuth::Password { credential: None } => {
+                // The session says "password" and names no entry, which is what an imported session
+                // looks like when its password was never brought across.
+                self.notices.push(format!(
+                    "{} has no stored password; add one or use an agent key",
+                    config.host
+                ));
+                return;
+            }
+            SshAuth::Password {
+                credential: Some(credential),
+            } => {
+                let name = credential.key().to_owned();
+                match self.vault.get(&name) {
+                    Some(secret) => Auth::Password(secret),
+                    None if !self.vault.is_open() => {
+                        self.vault
+                            .ask(self.store.as_ref(), Some(PendingUnlock::Session));
+                        self.pending_session = Some(config);
+                        return;
+                    }
+                    None => {
+                        self.notices
+                            .push(format!("the vault holds no entry called '{name}'"));
+                        return;
+                    }
+                }
+            }
+            SshAuth::PublicKey { path, .. } => Auth::PrivateKeyFile {
+                path: std::path::PathBuf::from(path),
+                // A passphrase from the vault comes with key authentication proper; a key without one
+                // works today and is the common case for a key an agent is not holding.
+                passphrase: None,
+            },
+            other => {
+                self.notices.push(format!(
+                    "{} authentication is not wired up yet",
+                    match other {
+                        SshAuth::KeyboardInteractive => "keyboard-interactive",
+                        _ => "this",
+                    }
+                ));
+                return;
+            }
+        };
+
         let waker = {
             let ctx = ctx.clone();
             std::sync::Arc::new(move || ctx.request_repaint())
@@ -273,6 +334,7 @@ impl BestTermApp {
         ssh::connect(
             self.runtime.handle(),
             config,
+            auth,
             read_known_hosts(),
             size,
             self.sessions.0.clone(),
@@ -407,6 +469,91 @@ impl BestTermApp {
         }
     }
 
+    /// Ask for the master password, if something is waiting on it.
+    fn vault_prompt(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = self.vault.prompt else {
+            return;
+        };
+        let mut submit = false;
+        let mut cancel = false;
+
+        egui::Modal::new(egui::Id::new("bestterm_vault")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            match prompt {
+                Prompt::Unlock => {
+                    ui.heading("Unlock the credential vault");
+                    ui.label("Your stored passwords are encrypted with this.");
+                }
+                Prompt::Create => {
+                    ui.heading("Choose a master password");
+                    ui.label(
+                        "It encrypts every password this application stores. There is no way to \
+                         recover it, and nothing here will remember it for you.",
+                    );
+                }
+            }
+            ui.add_space(8.0);
+
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.vault.typed)
+                    .password(true)
+                    .hint_text("Master password")
+                    .desired_width(f32::INFINITY),
+            );
+            field.request_focus();
+
+            if prompt == Prompt::Create {
+                ui.add_space(4.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.vault.repeated)
+                        .password(true)
+                        .hint_text("Repeat it")
+                        .desired_width(f32::INFINITY),
+                );
+            }
+
+            if let Some(error) = &self.vault.error {
+                ui.add_space(4.0);
+                ui.colored_label(egui::Color32::from_rgb(0xB0, 0x20, 0x20), error);
+            }
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let label = if prompt == Prompt::Create {
+                    "Create"
+                } else {
+                    "Unlock"
+                };
+                if ui.button(label).clicked() {
+                    submit = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+
+            // Enter submits, because a password field that needs a mouse is a password field people
+            // grow to resent.
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                submit = true;
+            }
+        });
+
+        if cancel {
+            self.vault.cancel();
+            self.pending_session = None;
+            return;
+        }
+        if submit {
+            let resumed = self.vault.submit(self.store.as_ref());
+            if let (Some(PendingUnlock::Session), Some(config)) =
+                (resumed, self.pending_session.take())
+            {
+                self.connect_ssh(config, ctx);
+            }
+        }
+    }
+
     /// Show whatever went wrong, until it is dismissed.
     fn notice_window(&mut self, ctx: &egui::Context) {
         if self.notices.is_empty() {
@@ -460,14 +607,30 @@ impl BestTermApp {
             })
             .count();
 
-        // Secrets found in clear text are deliberately not taken. They belong in the vault, which is
-        // not wired into the interface yet, and holding them anywhere else -- even in memory, even
-        // briefly -- would be the wrong habit to start.
+        // Secrets arrive in clear text, which is how the file stores them, and go straight into the
+        // vault. They are never written anywhere else and never held past this function: an import
+        // that left a copy in a log or a temporary file would undo the vault entirely.
         if !import.secrets.is_empty() {
-            self.notices.push(format!(
-                "{} stored password(s) were left behind: the vault is not wired up yet",
-                import.secrets.len()
-            ));
+            if self.vault.is_open() {
+                let mut stored = 0;
+                for secret in &import.secrets {
+                    if self
+                        .vault
+                        .set(self.store.as_ref(), secret.reference.key(), &secret.secret)
+                    {
+                        stored += 1;
+                    }
+                }
+                self.notices
+                    .push(format!("{stored} password(s) moved into the vault"));
+            } else {
+                // Refused rather than kept in memory until an unlock: the person can unlock and import
+                // again, and nothing is lost because the file is still theirs.
+                self.notices.push(format!(
+                    "{} password(s) were not imported: unlock the vault first, then import again",
+                    import.secrets.len()
+                ));
+            }
         }
         if !import.skipped.is_empty() {
             self.notices
@@ -862,6 +1025,7 @@ impl eframe::App for BestTermApp {
         // Modal, and over everything: a question about a server's identity is not something to
         // answer by accident while reaching for a tab.
         self.host_key_prompt(&ctx);
+        self.vault_prompt(&ctx);
         self.notice_window(&ctx);
 
         if let Some(index) = requested_shell {
