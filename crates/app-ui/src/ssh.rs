@@ -104,6 +104,18 @@ pub(crate) enum SessionEvent {
         title: String,
         /// The transport, ready for a tab to adopt.
         open: Box<OpenTransport>,
+        /// The connection the transport's channel hangs off.
+        ///
+        /// Held, not discarded. An [`SshConnection`] owns the sender the session loop reads from, so
+        /// dropping it closes the loop and tears down the TCP connection -- taking the shell channel
+        /// with it. The first version of this let the connection fall out of scope as soon as the
+        /// shell was open, which would have opened a session and killed it in the same breath. It was
+        /// never seen because the only live test failed at authentication, one step earlier.
+        ///
+        /// It is an `Arc` because more than one thing will eventually hang off one connection: another
+        /// terminal tab, an SFTP panel, a set of port forwards. `docs/ARCHITECTURE.md` calls this
+        /// "session is not tab", and this is the field that makes it true.
+        session: Arc<SshConnection>,
         /// The key to append to `known_hosts`, when the person accepted a new one.
         record: Option<HostKeyRecord>,
     },
@@ -231,10 +243,14 @@ pub(crate) fn connect(
                         key: outcome.key,
                     });
 
+                // Wrapped before the shell is opened, so the only owner from here on is the one that
+                // travels with the transport.
+                let connection = Arc::new(connection);
                 match connection.open_shell(size, "xterm-256color").await {
                     Ok(open) => SessionEvent::Opened {
                         title,
                         open: Box::new(open),
+                        session: Arc::clone(&connection),
                         record,
                     },
                     Err(error) => SessionEvent::Failed {

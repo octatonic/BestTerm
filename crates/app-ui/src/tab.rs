@@ -75,6 +75,13 @@ pub(crate) struct TerminalTab {
     fallback_title: String,
     exit: Option<ExitInfo>,
     grid: (usize, usize),
+    /// Whatever the transport needs kept alive underneath it.
+    ///
+    /// For an SSH tab this is the connection the shell channel hangs off; dropping it would close the
+    /// session and, with it, this tab's transport. A local shell has nothing here. It is `dyn Any`
+    /// because a tab genuinely does not care what it is holding -- only that it must not be dropped
+    /// first.
+    _owner: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 /// Something that asks the interface to draw a frame.
@@ -82,6 +89,30 @@ pub(crate) struct TerminalTab {
 /// A closure rather than the windowing type, so this module says what it needs — "wake up" — without
 /// naming who provides it, and so a test can count the wake-ups.
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// Everything a tab needs to exist.
+///
+/// A struct rather than eight parameters, which is both what clippy asked for and what reads better:
+/// at a call site the names are visible, and `owner` in particular is the kind of argument that is
+/// invisible and load-bearing when it is the eighth positional one.
+pub(crate) struct NewTab {
+    /// The transport, already open.
+    pub(crate) open: OpenTransport,
+    /// The session's name, which is what the tab is labelled with.
+    pub(crate) title: String,
+    /// Initial grid width.
+    pub(crate) cols: usize,
+    /// Initial grid height.
+    pub(crate) rows: usize,
+    /// Scrollback lines to keep.
+    pub(crate) scrollback: usize,
+    /// Colours for the emulator.
+    pub(crate) palette: Palette,
+    /// What wakes the interface when output arrives.
+    pub(crate) waker: Waker,
+    /// Whatever must be kept alive underneath the transport; see [`TerminalTab`].
+    pub(crate) owner: Option<Box<dyn std::any::Any + Send + Sync>>,
+}
 
 impl TerminalTab {
     /// Open a tab running `profile`.
@@ -94,15 +125,17 @@ impl TerminalTab {
         waker: Waker,
     ) -> TransportResult<Self> {
         let open = PtyTransport::spawn(profile, GridSize::new(cols as u16, rows as u16))?;
-        Ok(Self::adopt(
+        Ok(Self::adopt(NewTab {
             open,
-            profile.label.clone(),
+            title: profile.label.clone(),
             cols,
             rows,
             scrollback,
             palette,
             waker,
-        ))
+            // A local shell's process is owned by the transport itself.
+            owner: None,
+        }))
     }
 
     /// Take over a transport somebody else opened.
@@ -110,15 +143,17 @@ impl TerminalTab {
     /// A local shell and an SSH session differ only in how the transport comes into being; once it
     /// exists, a tab treats them identically, which is the point of [`Transport`] being a trait. This
     /// is the constructor SSH uses, and [`TerminalTab::spawn`] is a thin wrapper over it.
-    pub(crate) fn adopt(
-        open: OpenTransport,
-        title: String,
-        cols: usize,
-        rows: usize,
-        scrollback: usize,
-        palette: Palette,
-        waker: Waker,
-    ) -> Self {
+    pub(crate) fn adopt(spec: NewTab) -> Self {
+        let NewTab {
+            open,
+            title,
+            cols,
+            rows,
+            scrollback,
+            palette,
+            waker,
+            owner,
+        } = spec;
         let emulator = AlacrittyEmulator::new(cols, rows, scrollback, palette);
         let events = relay(open.events, waker, title.clone());
 
@@ -129,6 +164,7 @@ impl TerminalTab {
             fallback_title: title,
             exit: None,
             grid: (cols, rows),
+            _owner: owner,
         }
     }
 
@@ -263,5 +299,98 @@ impl TerminalTab {
         if let Err(err) = self.transport.shutdown() {
             tracing::debug!(%err, "shutting down the transport failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bestterm_transport::TransportKind;
+
+    use super::*;
+
+    /// A transport that does nothing, so a tab can be built without a shell or a network.
+    struct Inert;
+
+    impl Transport for Inert {
+        fn kind(&self) -> TransportKind {
+            TransportKind::Ssh
+        }
+        fn write(&mut self, _data: &[u8]) -> TransportResult<()> {
+            Ok(())
+        }
+        fn resize(&mut self, _size: GridSize) -> TransportResult<()> {
+            Ok(())
+        }
+        fn size(&self) -> GridSize {
+            GridSize::new(80, 24)
+        }
+        fn shutdown(&mut self) -> TransportResult<()> {
+            Ok(())
+        }
+        fn label(&self) -> String {
+            "inert".to_string()
+        }
+    }
+
+    /// Counts its own destruction, which is the whole point of the test below.
+    struct Tattletale(Arc<AtomicUsize>);
+
+    impl Drop for Tattletale {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn inert_tab(owner: Option<Box<dyn std::any::Any + Send + Sync>>) -> TerminalTab {
+        let (_sender, events) = crossbeam_channel::unbounded();
+        // Leaked deliberately: dropping the sender would close the channel and stop the relay thread
+        // before the test has finished looking at the tab.
+        std::mem::forget(_sender);
+        TerminalTab::adopt(NewTab {
+            open: OpenTransport {
+                transport: Box::new(Inert),
+                events,
+            },
+            title: "test".to_string(),
+            cols: 80,
+            rows: 24,
+            scrollback: 100,
+            palette: Palette::default(),
+            waker: Arc::new(|| {}),
+            owner,
+        })
+    }
+
+    /// The regression this exists for: an SSH tab's transport is a channel on a connection, and the
+    /// connection owns the sender the session loop reads from. A tab that does not hold the connection
+    /// lets it drop as soon as the caller's binding goes out of scope, which closes the session and
+    /// kills the tab's own transport a moment after it was opened. Nothing observable fails at compile
+    /// time, and a live test only catches it if authentication succeeds -- so it is pinned here.
+    #[test]
+    fn a_tab_keeps_its_owner_alive() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let tab = inert_tab(Some(Box::new(Tattletale(Arc::clone(&drops)))));
+
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            0,
+            "the owner must outlive the call that built the tab"
+        );
+
+        drop(tab);
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "and must be released when the tab closes, not leaked"
+        );
+    }
+
+    #[test]
+    fn a_local_shell_needs_no_owner() {
+        // A PTY transport owns its process, so `None` is the honest answer rather than a placeholder.
+        let tab = inert_tab(None);
+        assert!(tab._owner.is_none());
     }
 }

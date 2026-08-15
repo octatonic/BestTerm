@@ -356,6 +356,7 @@ impl BestTermApp {
                 SessionEvent::Opened {
                     title,
                     open,
+                    session,
                     record,
                 } => {
                     if let Some(record) = record {
@@ -366,15 +367,18 @@ impl BestTermApp {
                         std::sync::Arc::new(move || ctx.request_repaint()) as crate::tab::Waker
                     };
                     let (cols, rows) = (80, 24);
-                    let tab = TerminalTab::adopt(
-                        *open,
+                    let tab = TerminalTab::adopt(crate::tab::NewTab {
+                        open: *open,
                         title,
                         cols,
                         rows,
-                        SCROLLBACK,
-                        self.palette.clone(),
+                        scrollback: SCROLLBACK,
+                        palette: self.palette.clone(),
                         waker,
-                    );
+                        // Without this the connection would be dropped here and the session would die
+                        // the moment it started working.
+                        owner: Some(Box::new(session)),
+                    });
                     self.tabs.push(tab);
                     self.chrome.active_tab = self.tabs.len() - 1;
                 }
