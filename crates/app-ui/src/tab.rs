@@ -283,9 +283,13 @@ impl TerminalTab {
         match &self.exit {
             Some(info) if info.is_success() => format!("{} — exited", self.transport.label()),
             Some(info) => {
+                // The message first, because it is the only one of the three written for a person:
+                // "the connection failed: Keepalive timeout" says what to do next, and "exited (1)"
+                // does not.
                 let detail = info
-                    .signal
+                    .message
                     .clone()
+                    .or_else(|| info.signal.clone())
                     .or_else(|| info.code.map(|code| code.to_string()))
                     .unwrap_or_else(|| "unknown".to_string());
                 format!("{} — exited ({detail})", self.transport.label())

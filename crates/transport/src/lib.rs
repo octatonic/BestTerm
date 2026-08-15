@@ -137,8 +137,13 @@ pub struct ExitInfo {
 
 impl ExitInfo {
     /// Whether this represents a clean exit.
+    ///
+    /// A `message` counts against it. A missing exit code is ordinary -- an interactive shell often
+    /// closes without sending one -- so `None` alone means nothing went wrong; but a transport that
+    /// went to the trouble of explaining itself is explaining a failure. Without this, a connection
+    /// that died mid-session reads exactly like one where somebody typed `exit`.
     pub fn is_success(&self) -> bool {
-        self.signal.is_none() && matches!(self.code, Some(0) | None)
+        self.signal.is_none() && self.message.is_none() && matches!(self.code, Some(0) | None)
     }
 }
 
@@ -194,6 +199,35 @@ pub struct OpenTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exit(code: Option<i32>, signal: Option<&str>, message: Option<&str>) -> ExitInfo {
+        ExitInfo {
+            code,
+            signal: signal.map(str::to_string),
+            message: message.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_shell_that_simply_ended_is_a_clean_exit() {
+        assert!(exit(Some(0), None, None).is_success());
+        // Interactive shells routinely close without sending a status. That is not a failure.
+        assert!(exit(None, None, None).is_success());
+    }
+
+    #[test]
+    fn a_transport_that_explained_itself_was_explaining_a_failure() {
+        // The distinction this exists for: a dropped network and `exit` both end a shell with no
+        // status, and only one of them is worth telling somebody about.
+        assert!(!exit(None, None, Some("the connection failed: Keepalive timeout")).is_success());
+        assert!(!exit(Some(0), None, Some("the server closed the connection")).is_success());
+    }
+
+    #[test]
+    fn a_status_or_a_signal_still_counts() {
+        assert!(!exit(Some(1), None, None).is_success());
+        assert!(!exit(None, Some("KILL"), None).is_success());
+    }
 
     #[test]
     fn grid_size_never_zero() {

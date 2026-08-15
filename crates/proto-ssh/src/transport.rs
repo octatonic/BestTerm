@@ -16,7 +16,8 @@
 //! and writing never contend for the same borrow. Writes reach the writer task through a queue, which
 //! is what lets [`Transport::write`] stay synchronous and callable from the UI thread.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bestterm_transport::{
     ExitInfo, GridSize, OpenTransport, Result as TransportResult, Transport, TransportError,
@@ -25,7 +26,7 @@ use bestterm_transport::{
 use russh::client::{self, Handle};
 use russh::keys::ssh_key;
 use russh::{ChannelMsg, Disconnect};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::auth::Auth;
 use crate::forward::{ForwardRegistry, Incoming};
@@ -167,6 +168,91 @@ impl std::fmt::Debug for Hop {
     }
 }
 
+/// How often the client asks the server whether it is still there.
+///
+/// `russh`'s client config sets none of the liveness fields by default, and `russh` never enables
+/// `SO_KEEPALIVE` on the socket either. Without this, a connection whose peer vanished -- a laptop
+/// carried out of range, a firewall that forgot the flow, a server that lost power -- parks the
+/// session task inside `read` and stays there. Nothing times out, the tab looks connected, and typing
+/// into it does nothing forever.
+///
+/// # The hazard this comes with
+///
+/// `russh` 0.62.6 skips the whole keepalive branch unless the session has reached
+/// `EncryptedState::Authenticated`, *and does not rearm the timer when it skips it*
+/// (`russh-0.62.6/src/client/mod.rs:1237-1249` for the branch, `:1321-1328` for the rearm, which is
+/// conditional on having sent a keepalive or received data). An elapsed `tokio::time::Sleep` polls
+/// ready forever, so from the moment this interval first elapses before authentication finishes
+/// until it does finish, that session's select loop spins a core.
+///
+/// In practice that window is milliseconds: a password, a key or an agent all answer immediately.
+/// It is only reachable through keyboard-interactive authentication with a person reading a token
+/// off a device, which is why this is set well above how long the other methods take rather than as
+/// low as detection alone would want.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How long a closing shell waits to learn why its connection ended.
+///
+/// See [`SshConnection::open_shell`]. Bounded because the answer may never come: a connection closed
+/// deliberately drops its notification rather than sending one.
+const DEATH_REPORT_GRACE: Duration = Duration::from_millis(250);
+
+/// How many unanswered keepalives before the connection is called dead.
+///
+/// `russh` increments its counter and then compares, so the error arrives on expiry number
+/// `KEEPALIVE_MAX + 1` -- about two minutes with the interval above. Any inbound traffic at all
+/// resets the counter, so this is a bound on silence rather than on unanswered probes.
+const KEEPALIVE_MAX: usize = 3;
+
+/// How a session ended, when it ended on its own.
+#[derive(Debug)]
+pub enum Death {
+    /// The server sent `SSH_MSG_DISCONNECT`.
+    ///
+    /// Deliberate: an idle policy, an administrator, a session limit. Told apart from a transport
+    /// failure because it is the one kind that must never be retried -- reconnecting after being
+    /// asked to leave is how a client argues with an operator.
+    ByServer {
+        /// The server's own words for it.
+        message: String,
+    },
+    /// The transport failed.
+    ///
+    /// A reconnect candidate, with one caveat worth remembering: `KeepaliveTimeout` also fires when
+    /// a laptop wakes from sleep, and the session on the other end may still be alive. Reconnecting
+    /// there orphans it.
+    Transport(String),
+}
+
+impl std::fmt::Display for Death {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ByServer { message } if message.is_empty() => {
+                f.write_str("the server closed the connection")
+            }
+            Self::ByServer { message } => write!(f, "the server closed the connection: {message}"),
+            Self::Transport(detail) => write!(f, "the connection failed: {detail}"),
+        }
+    }
+}
+
+/// A client configuration with liveness detection turned on.
+///
+/// One function rather than two call sites, because a jump host whose link dies unnoticed is worse
+/// than a destination whose link dies unnoticed: everything tunnelled through it dies with it, and
+/// the failure surfaces at the far end as the destination hanging up.
+fn keepalive_config() -> client::Config {
+    client::Config {
+        keepalive_interval: Some(KEEPALIVE_INTERVAL),
+        keepalive_max: KEEPALIVE_MAX,
+        // Left off deliberately. It is a hard kill with no probe first, and `russh` rearms it on
+        // outbound traffic as well as inbound -- so it measures "nothing happened at all", not "the
+        // peer went quiet", and a session left at a prompt overnight would be closed for it.
+        inactivity_timeout: None,
+        ..client::Config::default()
+    }
+}
+
 /// An authenticated SSH connection.
 pub struct SshConnection {
     handle: Handle<Handler>,
@@ -182,6 +268,13 @@ pub struct SshConnection {
     ///
     /// Shared with the handler, which is the only thing `russh` gives a look at those channels.
     forwards: ForwardRegistry,
+    /// Fires once, when the session ends by itself.
+    ///
+    /// A `Mutex<Option<..>>` because [`SshConnection::on_death`] takes `&self` -- the connection is
+    /// behind an `Arc` by the time anybody wants to watch it -- and because there is exactly one
+    /// death to hand out. The second caller gets `None`, which is honest: two things cannot both own
+    /// the notification.
+    death: Mutex<Option<oneshot::Receiver<Death>>>,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -205,11 +298,13 @@ impl SshConnection {
         verifier: Arc<dyn HostKeyVerifier>,
     ) -> Result<Self, SshError> {
         let checker = HostKeyChecker::new(&target.host, target.port, known_hosts, verifier);
-        let config = Arc::new(client::Config::default());
+        let config = Arc::new(keepalive_config());
         let forwards = ForwardRegistry::default();
+        let (died, death) = oneshot::channel();
         let handler = Handler {
             checker: checker.clone(),
             forwards: forwards.clone(),
+            died: Some(died),
         };
 
         let mut handle =
@@ -240,7 +335,18 @@ impl SshConnection {
             target,
             via: Vec::new(),
             forwards,
+            death: Mutex::new(Some(death)),
         })
+    }
+
+    /// Take the notification that this session has ended.
+    ///
+    /// Available once. Awaiting it yields how the session died, or nothing if the task was torn down
+    /// without going through `disconnected` -- which is what happens when the connection is dropped
+    /// deliberately, and is precisely the case that must not look like a failure worth reconnecting
+    /// from.
+    pub fn on_death(&self) -> Option<oneshot::Receiver<Death>> {
+        self.death.lock().ok()?.take()
     }
 
     /// Connect to `destination` through a chain of jump hosts, nearest first.
@@ -305,11 +411,13 @@ impl SshConnection {
         let checker =
             HostKeyChecker::new(&hop.target.host, hop.target.port, known_hosts, hop.verifier);
         let forwards = ForwardRegistry::default();
+        let (died, death) = oneshot::channel();
         let handler = Handler {
             checker: checker.clone(),
             forwards: forwards.clone(),
+            died: Some(died),
         };
-        let config = Arc::new(client::Config::default());
+        let config = Arc::new(keepalive_config());
 
         let mut handle = match client::connect_stream(config, channel.into_stream(), handler).await
         {
@@ -336,6 +444,7 @@ impl SshConnection {
             target: hop.target,
             via: Vec::new(),
             forwards,
+            death: Mutex::new(Some(death)),
         })
     }
 
@@ -369,6 +478,11 @@ impl SshConnection {
         let (commands_tx, mut commands_rx) = mpsc::unbounded_channel::<Command>();
 
         let label = format!("{}@{}", self.target.user, self.target.host);
+        // Taken here rather than watched separately: a shell channel closing and its connection
+        // dying look identical from inside the reader loop, and this is the only thing that can tell
+        // them apart. Only the first shell on a connection gets it, which is right -- the second
+        // would be reporting a death it does not own.
+        let death = self.on_death();
 
         tokio::spawn(async move {
             let mut exit_code: Option<i32> = None;
@@ -391,10 +505,31 @@ impl SshConnection {
                     _ => {}
                 }
             }
+            // The loop ends for two quite different reasons -- the remote shell exited, or the
+            // connection underneath it died -- and `wait()` returns `None` for both. Without this,
+            // a dropped network arrived at the interface as a shell that exited with no status,
+            // which is the same thing it says when somebody types `exit`.
+            //
+            // Waited for, briefly, rather than polled: `disconnected` runs on the session task and
+            // may not have got there yet when the channel's receiver closes. A quarter of a second
+            // is far longer than that ordering needs and short enough that a clean exit does not
+            // visibly pause.
+            let message = match death {
+                Some(death) => {
+                    match tokio::time::timeout(DEATH_REPORT_GRACE, death).await {
+                        Ok(Ok(death)) => Some(death.to_string()),
+                        // Dropped without firing: the connection was closed on purpose. A clean
+                        // shutdown, and it must not read as a failure.
+                        Ok(Err(_)) | Err(_) => None,
+                    }
+                }
+                None => None,
+            };
+
             let _ = events_tx.send(TransportEvent::Closed(ExitInfo {
                 code: exit_code,
                 signal: None,
-                message: None,
+                message,
             }));
         });
 
@@ -585,10 +720,58 @@ impl Transport for SshTransport {
 pub(crate) struct Handler {
     checker: HostKeyChecker,
     forwards: ForwardRegistry,
+    /// Taken on the one call `disconnected` ever gets.
+    ///
+    /// `Option` because the sender is consumed by sending, and `disconnected` has `&mut self` rather
+    /// than `self` -- so the type has to say "this happens once" where the signature will not.
+    died: Option<oneshot::Sender<Death>>,
 }
 
 impl client::Handler for Handler {
     type Error = SshError;
+
+    /// The only place the concrete reason a session ended is ever visible.
+    ///
+    /// `russh` calls this with the real error and then, if the override returns `Ok`, replaces it
+    /// with a generic `Disconnect` for whoever awaits the session task
+    /// (`russh-0.62.6/src/client/mod.rs:1152-1167`). Nothing in BestTerm awaits that task, so
+    /// without this the reason a connection died was constructed and then thrown away: every kind of
+    /// death arrived at the interface as a shell that had exited with no status.
+    fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let died = self.died.take();
+        async move {
+            let death = match reason {
+                client::DisconnectReason::ReceivedDisconnect(info) => {
+                    tracing::info!(
+                        code = ?info.reason_code,
+                        message = %info.message,
+                        "ssh: the server disconnected us"
+                    );
+                    Death::ByServer {
+                        message: info.message,
+                    }
+                }
+                client::DisconnectReason::Error(error) => {
+                    tracing::warn!(%error, "ssh: the connection failed");
+                    Death::Transport(error.to_string())
+                }
+            };
+
+            // Nobody listening is normal: a connection closed on purpose is dropped along with its
+            // receiver, and that is exactly the case that must not be reported as a failure.
+            if let Some(died) = died {
+                let _ = died.send(death);
+            }
+
+            // Returning `Ok` costs the session task's own error, which is fine *because* the reason
+            // was captured above. Doing both -- re-returning the error and sending it -- would be
+            // two ways to learn one thing, and they would disagree the moment one of them changed.
+            Ok(())
+        }
+    }
 
     fn check_server_key(
         &mut self,
