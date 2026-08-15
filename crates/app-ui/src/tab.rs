@@ -75,6 +75,13 @@ pub(crate) struct TerminalTab {
     fallback_title: String,
     exit: Option<ExitInfo>,
     grid: (usize, usize),
+    /// Which SSH connection this tab runs over, when it runs over one.
+    ///
+    /// Beside `_owner` rather than derived from it: the owner is erased to `dyn Any` because a tab
+    /// genuinely does not care what it is holding, and this is the one thing about it a tab does have
+    /// to know -- so that closing the last window on a connection can take the connection's tunnels
+    /// with it. `None` for a local shell, which has no connection to belong to.
+    pub(crate) connection: Option<crate::tunnels::ConnectionId>,
     /// Whatever the transport needs kept alive underneath it.
     ///
     /// For an SSH tab this is the connection the shell channel hangs off; dropping it would close the
@@ -164,6 +171,7 @@ impl TerminalTab {
             fallback_title: title,
             exit: None,
             grid: (cols, rows),
+            connection: None,
             _owner: owner,
         }
     }

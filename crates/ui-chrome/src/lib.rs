@@ -224,6 +224,8 @@ pub enum ChromeAction {
     SelectSidebarPanel(SidebarPanel),
     /// Open the session dialog.
     OpenSessionDialog,
+    /// Open the port forwarding window.
+    OpenTunnels,
     /// Quit the application.
     Quit,
     /// A control that exists in the layout but has no behaviour yet.
@@ -362,6 +364,7 @@ fn ribbon_icon_button(ui: &mut Ui, theme: &ChromeTheme, label: &str) -> Response
 fn ribbon_action(label: &'static str) -> ChromeAction {
     match label {
         "Session" => ChromeAction::OpenSessionDialog,
+        "Tunneling" => ChromeAction::OpenTunnels,
         "Exit" => ChromeAction::Quit,
         other => ChromeAction::Unimplemented(other),
     }
@@ -714,6 +717,7 @@ mod tests {
         }
         assert_eq!(ribbon_action("Exit"), ChromeAction::Quit);
         assert_eq!(ribbon_action("Session"), ChromeAction::OpenSessionDialog);
+        assert_eq!(ribbon_action("Tunneling"), ChromeAction::OpenTunnels);
     }
 
     #[test]

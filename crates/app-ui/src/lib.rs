@@ -5,6 +5,7 @@
 
 mod ssh;
 mod tab;
+mod tunnels;
 mod vault;
 
 use bestterm_config::ConfigStore;
@@ -93,6 +94,19 @@ pub struct BestTermApp {
     vault: VaultState,
     /// A session that was waiting for the vault to open.
     pending_session: Option<bestterm_core_model::SshConfig>,
+    /// SSH connections with at least one tab open, and what to call them.
+    ///
+    /// Held here as well as in the tabs because a tunnel outlives the tab that started it and has to
+    /// be able to name the connection it runs over. Pruned in [`BestTermApp::close_tab`], which is
+    /// the only thing that can know a connection has no windows left.
+    connections: Vec<tunnels::LiveConnection>,
+    /// Where the next connection's id comes from.
+    ///
+    /// Never reused, so a tunnel cannot end up pointing at a different session than the one it was
+    /// opened over.
+    next_connection: u64,
+    /// Port forwarding: the window, the form and what is running.
+    tunnels: tunnels::TunnelState,
 }
 
 impl Default for BestTermApp {
@@ -181,6 +195,9 @@ impl BestTermApp {
             notices: Vec::new(),
             vault: VaultState::default(),
             pending_session: None,
+            connections: Vec::new(),
+            next_connection: 1,
+            tunnels: tunnels::TunnelState::default(),
         }
     }
 
@@ -217,7 +234,20 @@ impl BestTermApp {
             return;
         }
         let mut tab = self.tabs.remove(index);
+        let connection = tab.connection;
         tab.shutdown();
+
+        // A connection ends when its last window does. Anything still running over it -- today the
+        // tunnels, tomorrow an SFTP panel -- goes with it, because a forward that outlived every
+        // window that could show it is a listening socket nobody knows about, still carrying traffic
+        // into a network somebody believes they have left.
+        if let Some(id) = connection
+            && !self.tabs.iter().any(|other| other.connection == Some(id))
+        {
+            self.tunnels.stop_all_over(&self.runtime, id);
+            self.connections.retain(|live| live.id != id);
+        }
+
         if self.chrome.active_tab >= self.tabs.len() {
             self.chrome.active_tab = self.tabs.len().saturating_sub(1);
         }
@@ -243,6 +273,16 @@ impl BestTermApp {
                 }
                 ChromeAction::SelectTab(_) => {}
                 ChromeAction::CloseTab(index) => self.close_tab(index),
+                ChromeAction::OpenTunnels => {
+                    self.tunnels.open = true;
+                    // Pre-selected when there is only one candidate, because choosing between one
+                    // thing is not a choice.
+                    if self.tunnels.form.over.is_none()
+                        && let [only] = self.connections.as_slice()
+                    {
+                        self.tunnels.form.over = Some(only.id);
+                    }
+                }
                 ChromeAction::ToggleSidebar => {
                     self.chrome.sidebar_open = !self.chrome.sidebar_open;
                 }
@@ -367,7 +407,18 @@ impl BestTermApp {
                         std::sync::Arc::new(move || ctx.request_repaint()) as crate::tab::Waker
                     };
                     let (cols, rows) = (80, 24);
-                    let tab = TerminalTab::adopt(crate::tab::NewTab {
+
+                    // Recorded before the tab takes it, so the tunnel window can offer this session
+                    // without reaching into a tab for it.
+                    let id = tunnels::ConnectionId(self.next_connection);
+                    self.next_connection += 1;
+                    self.connections.push(tunnels::LiveConnection {
+                        id,
+                        label: title.clone(),
+                        connection: std::sync::Arc::clone(&session),
+                    });
+
+                    let mut tab = TerminalTab::adopt(crate::tab::NewTab {
                         open: *open,
                         title,
                         cols,
@@ -379,6 +430,7 @@ impl BestTermApp {
                         // the moment it started working.
                         owner: Some(Box::new(session)),
                     });
+                    tab.connection = Some(id);
                     self.tabs.push(tab);
                     self.chrome.active_tab = self.tabs.len() - 1;
                 }
@@ -588,6 +640,176 @@ impl BestTermApp {
             });
         if dismiss {
             self.notices.clear();
+        }
+    }
+
+    /// The port forwarding window.
+    ///
+    /// One window with the running tunnels above and a form below, rather than a wizard: a tunnel is
+    /// four fields, and the thing people actually come here to do is check whether the one they
+    /// opened this morning is still up.
+    fn tunnel_window(&mut self, ctx: &egui::Context) {
+        if !self.tunnels.open {
+            return;
+        }
+
+        let mut open = true;
+        let mut start: Option<tunnels::TunnelRequest> = None;
+        let mut stop: Option<usize> = None;
+
+        egui::Window::new("Port forwarding")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Running").strong());
+                if self.tunnels.running.is_empty() {
+                    ui.weak("Nothing is forwarded.");
+                } else {
+                    for (index, tunnel) in self.tunnels.running.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.button("Stop").clicked() {
+                                stop = Some(index);
+                            }
+                            ui.label(tunnel.describe());
+                            ui.weak(format!("over {}", tunnel.over_label));
+                        });
+                    }
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                if self.connections.is_empty() {
+                    // Said plainly rather than shown as an empty list with a dead button: there is a
+                    // real prerequisite here, and "open an SSH session first" is the whole answer.
+                    ui.label("Open an SSH session first — a tunnel runs over one.");
+                    return;
+                }
+
+                ui.label(egui::RichText::new("New tunnel").strong());
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    for kind in tunnels::TunnelKind::ALL {
+                        if ui
+                            .selectable_label(self.tunnels.form.kind == kind, kind.label())
+                            .clicked()
+                        {
+                            self.tunnels.form.kind = kind;
+                            self.tunnels.error = None;
+                        }
+                    }
+                });
+
+                ui.add_space(4.0);
+                ui.weak(self.tunnels.form.kind.summary());
+                ui.add_space(8.0);
+
+                let selected = self
+                    .connections
+                    .iter()
+                    .find(|live| Some(live.id) == self.tunnels.form.over);
+                egui::ComboBox::from_label("Over")
+                    .selected_text(match selected {
+                        Some(live) => live.label.clone(),
+                        None => "Choose a session".to_string(),
+                    })
+                    .show_ui(ui, |ui| {
+                        for live in &self.connections {
+                            ui.selectable_value(
+                                &mut self.tunnels.form.over,
+                                Some(live.id),
+                                &live.label,
+                            );
+                        }
+                    });
+
+                ui.add_space(6.0);
+                egui::Grid::new("tunnel-form")
+                    .num_columns(2)
+                    .spacing([8.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Listen on");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.tunnels.form.listen_host)
+                                    .hint_text(match self.tunnels.form.kind {
+                                        tunnels::TunnelKind::Remote => "server decides",
+                                        _ => "127.0.0.1",
+                                    })
+                                    .desired_width(160.0),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.tunnels.form.listen_port)
+                                    .hint_text("port")
+                                    .desired_width(70.0),
+                            );
+                        });
+                        ui.end_row();
+
+                        if self.tunnels.form.kind.has_target() {
+                            ui.label("Connect to");
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.tunnels.form.target_host)
+                                        .hint_text("host")
+                                        .desired_width(160.0),
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.tunnels.form.target_port)
+                                        .hint_text("port")
+                                        .desired_width(70.0),
+                                );
+                            });
+                            ui.end_row();
+                        }
+                    });
+
+                if let Some(error) = self.tunnels.error {
+                    ui.add_space(4.0);
+                    ui.colored_label(egui::Color32::from_rgb(0xB0, 0x20, 0x20), error.message());
+                }
+                if let Some(notice) = &self.tunnels.notice {
+                    ui.add_space(4.0);
+                    ui.colored_label(egui::Color32::from_rgb(0xB0, 0x20, 0x20), notice);
+                }
+
+                ui.add_space(8.0);
+                if ui.button("Open").clicked() {
+                    match self.tunnels.form.check() {
+                        Ok(request) => {
+                            self.tunnels.error = None;
+                            start = Some(request);
+                        }
+                        Err(error) => self.tunnels.error = Some(error),
+                    }
+                }
+            });
+
+        // Acted on after the window closes, because both borrow the state the window is drawing.
+        if let Some(index) = stop {
+            self.tunnels.stop(&self.runtime, index);
+        }
+        if let Some(request) = start {
+            // Looked up again rather than captured: the window ran a frame ago in wall-clock terms,
+            // and a session can close between a click and its handling.
+            match self
+                .connections
+                .iter()
+                .find(|live| live.id == request.over)
+                .map(|live| tunnels::LiveConnection {
+                    id: live.id,
+                    label: live.label.clone(),
+                    connection: std::sync::Arc::clone(&live.connection),
+                }) {
+                Some(over) => self.tunnels.start(&self.runtime, request, &over),
+                None => self.tunnels.error = Some(tunnels::FormError::NoConnection),
+            }
+        }
+        if !open {
+            self.tunnels.open = false;
         }
     }
 
@@ -1038,6 +1260,7 @@ impl eframe::App for BestTermApp {
         self.host_key_prompt(&ctx);
         self.vault_prompt(&ctx);
         self.notice_window(&ctx);
+        self.tunnel_window(&ctx);
 
         if let Some(index) = requested_shell {
             self.open_shell(index, &ctx);
