@@ -1161,6 +1161,14 @@ fn home_directory() -> Option<std::path::PathBuf> {
 /// The user and the port are both optional, which is what makes this worth a function: `srv.int`,
 /// `admin@srv.int` and `admin@srv.int:2222` all have to work, and a bracketed IPv6 address must not have
 /// its colons mistaken for a port separator.
+///
+/// # Why it is strict about what a host may contain
+///
+/// This is reached from the command line as well as from the quick-connect field, and a stray word in
+/// an argument list must not become a network connection. That is not hypothetical: a path with a space
+/// in it, passed unquoted, split into two arguments, and the leftover `Sessions.mxtsessions` was
+/// promptly looked up as a host name. A host is letters, digits, dots, hyphens and — for IPv6 — colons,
+/// so anything else is refused rather than resolved.
 fn parse_quick_connect(text: &str) -> Option<bestterm_core_model::SshConfig> {
     let text = text.trim();
     if text.is_empty() {
@@ -1192,7 +1200,7 @@ fn parse_quick_connect(text: &str) -> Option<bestterm_core_model::SshConfig> {
         }
     };
 
-    if host.is_empty() {
+    if host.is_empty() || !is_plausible_host(&host) {
         return None;
     }
     Some(bestterm_core_model::SshConfig {
@@ -1201,6 +1209,21 @@ fn parse_quick_connect(text: &str) -> Option<bestterm_core_model::SshConfig> {
         user,
         ..bestterm_core_model::SshConfig::default()
     })
+}
+
+/// Whether a string could be a host name or an address.
+///
+/// Deliberately about *shape* and not about existence: resolving it to find out would mean a DNS
+/// lookup for every typo, and on many networks a lookup is itself a disclosure. What this rules out is
+/// the shape of a file name or a fragment of a sentence — which is what turns up when an argument list
+/// has been split somewhere it should not have been.
+fn is_plausible_host(host: &str) -> bool {
+    // A trailing dot is legal in a fully-qualified name and an embedded colon is legal in IPv6.
+    !host.starts_with('.')
+        && !host.starts_with('-')
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '_'))
 }
 
 /// A square, hairline-bordered chrome panel.
@@ -1289,6 +1312,31 @@ mod tests {
         let no_port = parse_quick_connect("[2001:db8::1]").expect("bracketed without a port");
         assert_eq!(no_port.host, "2001:db8::1");
         assert_eq!(no_port.port, 22);
+    }
+
+    #[test]
+    fn a_stray_word_never_becomes_a_connection() {
+        // The case that actually happened: an unquoted path with a space split into two arguments, and
+        // the leftover was looked up as a host. A host does not contain a backslash or a space.
+        assert!(
+            parse_quick_connect("Sessions.mxtsessions").is_some(),
+            "a bare name is a plausible host"
+        );
+        assert!(
+            parse_quick_connect("D:\\DBA\\MobaXterm").is_none(),
+            "a path is not a host"
+        );
+        assert!(parse_quick_connect("some words here").is_none());
+        assert!(parse_quick_connect("--import").is_none());
+        assert!(parse_quick_connect("/etc/hosts").is_none());
+        assert!(
+            parse_quick_connect(".hidden").is_none(),
+            "a leading dot is not a host"
+        );
+        assert!(
+            parse_quick_connect("-flag").is_none(),
+            "a leading hyphen is not a host"
+        );
     }
 
     #[test]
