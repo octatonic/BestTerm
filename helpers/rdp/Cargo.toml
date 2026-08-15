@@ -58,6 +58,16 @@ bestterm-core-vault = { path = "../../crates/core-vault", version = "0.1.0" }
 # two versions go together.
 ironrdp-connector = "0.10"
 ironrdp-pdu = { version = "0.9", features = ["std"] }
+# The active stage: everything after the handshake. `ironrdp-session` 0.11 pins the
+# other three to these versions, so they resolve to one copy each.
+ironrdp-session = "0.11"
+# For `PixelFormat`, which describes the framebuffer's byte order.
+ironrdp-graphics = "0.9"
+# Dynamic virtual channels, and the display-control channel that rides on one. Both
+# are needed for resize: the connector registers neither by itself, and without them
+# `encode_resize` returns `None` forever.
+ironrdp-dvc = "0.8"
+ironrdp-displaycontrol = "0.8"
 # The tokio adapter without its `reqwest` feature: that feature exists only for
 # the Kerberos network client, and pulling an HTTP stack in for a feature this
 # build refuses would be a strange trade. See session.rs.

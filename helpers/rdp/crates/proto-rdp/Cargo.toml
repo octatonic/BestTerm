@@ -13,8 +13,16 @@ workspace = true
 
 [dependencies]
 bestterm-ipc-frame.workspace = true
+# The active stage speaks in `surface` types -- damage rectangles, pixel formats,
+# cursor shapes -- because that is what crosses the process boundary. `ipc-frame`
+# re-exports them, but naming the crate directly says which vocabulary this is.
+bestterm-surface.workspace = true
 ironrdp-connector.workspace = true
+ironrdp-displaycontrol.workspace = true
+ironrdp-dvc.workspace = true
+ironrdp-graphics.workspace = true
 ironrdp-pdu.workspace = true
+ironrdp-session.workspace = true
 ironrdp-tls.workspace = true
 ironrdp-tokio.workspace = true
 sha2.workspace = true
@@ -25,4 +33,3 @@ tracing.workspace = true
 [dev-dependencies]
 # Only the tests build a request from scratch; the crate itself receives one already assembled.
 bestterm-core-vault.workspace = true
-bestterm-surface.workspace = true

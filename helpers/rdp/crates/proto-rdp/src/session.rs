@@ -27,6 +27,8 @@ use bestterm_ipc_frame::ConnectRequest;
 use ironrdp_connector::{
     ClientConnector, ConnectionResult, ConnectorError, ConnectorResult, ServerName, sspi,
 };
+use ironrdp_displaycontrol::client::DisplayControlClient;
+use ironrdp_dvc::DrdynvcClient;
 use ironrdp_tokio::{NetworkClient, TokioFramed};
 use tokio::net::TcpStream;
 
@@ -189,7 +191,19 @@ pub async fn connect<V: Verifier>(
     tracing::debug!(host = %request.host, port = request.port, "rdp: connected");
 
     let mut framed = TokioFramed::new(stream);
-    let mut connector = ClientConnector::new(config, client_addr);
+    // The display control channel is attached here or never. It rides on the dynamic virtual
+    // channel multiplexer, the connector registers neither by itself, and without both of them
+    // `ActiveStage::encode_resize` returns `None` for the whole life of the session -- silently, as
+    // a server that simply does not support resizing. Attaching it costs one channel; not attaching
+    // it costs the feature.
+    //
+    // The callback answers the server's capability announcement. Nothing is requested back: the
+    // monitor layout this client sends is the one `encode_resize` builds, and sending a second one
+    // from here would only race it.
+    let mut connector = ClientConnector::new(config, client_addr).with_static_channel(
+        DrdynvcClient::new()
+            .with_dynamic_channel(DisplayControlClient::new(|_capabilities| Ok(Vec::new()))),
+    );
 
     let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
         .await
