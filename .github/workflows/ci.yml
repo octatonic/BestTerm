@@ -126,6 +126,13 @@ jobs:
             echo "BESTTERM_SSH_TEST_HOST_KEY=$(cat /etc/bestterm-sshd/host_ed25519.pub)"
           } >> "$GITHUB_ENV"
 
+      # Before the main test run, not after. `crates/helper-surface`'s boundary test launches this
+      # binary and talks to it, and it is the only test that proves the two processes agree about
+      # their protocol -- everything else checks one side. Without the binary that test skips, which
+      # it announces, but a skip that happens on every CI run is a test nobody has.
+      - name: Build the RDP helper, so the boundary test has something to launch
+        run: cargo build --manifest-path helpers/rdp/Cargo.toml --workspace
+
       - name: Tests
         run: cargo test --workspace --all-targets
 

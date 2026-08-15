@@ -206,10 +206,12 @@ Marked here so nobody mistakes them for finished design:
   first letter produced tabs labelled `sC:\Windows\...`. Both are fixed. What is still unverified is
   everything measured rather than merely present: pixel parity against `ui-parity.md`, behaviour at
   150% and 200% scaling, and font metrics under a different DPI.
-* **The two halves of the RDP process boundary have not been introduced.** `bestterm-rdp` connects,
-  decodes and publishes frames into shared memory; nothing in the host launches it, opens the mapping
-  or draws what is in it. Both sides speak the same protocol and neither has met the other, so none of
-  it has run end to end. The `Session` dialog says as much when an RDP session is accepted.
+* **The RDP boundary works; nothing draws through it yet.** `crates/helper-surface` launches
+  `bestterm-rdp`, speaks its protocol, opens the shared mapping and presents the whole thing as a
+  `GraphicalSurface`, and `crates/helper-surface/tests/boundary.rs` proves the two processes agree by
+  running them against each other. What is missing is above that: a tab holds a `TerminalTab` and
+  nothing else, so there is no pane that can show a frame. The `Session` dialog still refuses an RDP
+  session for that reason.
 * The RDP helper cannot send input. It reports that once, on the first input message, rather than
   dropping events quietly — so a session is view-only and says so.
 * The vault has no OS keystore backend, so the master password is typed once per run of the

@@ -374,6 +374,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bestterm-helper-surface"
+version = "0.1.0"
+dependencies = [
+ "bestterm-core-vault",
+ "bestterm-ipc-frame",
+ "bestterm-surface",
+ "crossbeam-channel",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "bestterm-importers"
 version = "0.1.0"
 dependencies = [

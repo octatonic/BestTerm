@@ -179,6 +179,34 @@ pub enum SurfaceEvent {
     Cursor(CursorShape),
     /// The remote end put text on its clipboard.
     ClipboardOffer(String),
+    /// The remote end's identity is not settled, and the connection is waiting on an answer.
+    ///
+    /// Arrives before any credential has been sent, which is the whole point of it: after that the
+    /// password is already on the wire and asking is theatre. Answer with
+    /// [`GraphicalSurface::answer_server_key`]. Nothing else about the connection progresses until
+    /// then, so an answer that never comes is a connection that eventually gives up.
+    AskAboutServerKey {
+        /// The server, as the session named it.
+        host: String,
+        /// And on which port.
+        port: u16,
+        /// The key presented, in the form meant to be read aloud and compared.
+        fingerprint: String,
+        /// The key on record, when there was one and it did not match.
+        ///
+        /// `Some` is the serious case: something is answering for this address that was not
+        /// answering for it before.
+        expected: Option<String>,
+    },
+    /// The key this connection settled on, for whoever owns the store.
+    ///
+    /// Sent once, after the key was accepted and before any frame.
+    ServerKeySettled {
+        /// The digest, in the form the store keeps.
+        fingerprint: String,
+        /// False when it was already on record and nothing needs writing.
+        store: bool,
+    },
     /// The remote end disconnected.
     Closed {
         /// Human-readable reason, when the protocol supplied one.
@@ -282,6 +310,17 @@ pub trait GraphicalSurface: Send {
     /// The closure runs while a lock is held, so it must copy or upload and return — never block,
     /// and never call back into the surface.
     fn with_frame(&self, f: &mut dyn FnMut(&FrameMeta, &[u8]));
+
+    /// Answer a [`SurfaceEvent::AskAboutServerKey`].
+    ///
+    /// Refusing by default rather than accepting: a protocol backend that never asks will never have
+    /// this called, and one that asks and then silently succeeded on an unimplemented answer would be
+    /// accepting a server nobody looked at. There is no safe default except "no".
+    fn answer_server_key(&mut self, _accept: bool) -> Result<()> {
+        Err(SurfaceError::Protocol(
+            "this surface did not ask about a server key".to_string(),
+        ))
+    }
 
     /// Close the connection. Idempotent.
     fn shutdown(&mut self) -> Result<()>;

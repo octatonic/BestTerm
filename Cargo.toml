@@ -33,6 +33,7 @@ bestterm-core-vault = { path = "crates/core-vault", version = "0.1.0" }
 bestterm-importers = { path = "crates/importers", version = "0.1.0" }
 bestterm-proto-ssh = { path = "crates/proto-ssh", version = "0.1.0" }
 bestterm-ipc-frame = { path = "crates/ipc-frame", version = "0.1.0" }
+bestterm-helper-surface = { path = "crates/helper-surface", version = "0.1.0" }
 bestterm-core-pty = { path = "crates/core-pty", version = "0.1.0" }
 bestterm-core-terminal = { path = "crates/core-terminal", version = "0.1.0" }
 bestterm-term-render = { path = "crates/term-render", version = "0.1.0" }
