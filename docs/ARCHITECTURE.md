@@ -195,11 +195,9 @@ Marked here so nobody mistakes them for finished design:
   tab bar, status bar — with placeholder actions. Pixel parity against
   [`ui-parity.md`](ui-parity.md) is phase 1.
 * No configuration persistence yet. Phase 1.
-* `Cargo.lock` is not committed, although `.gitignore` says it is. Nothing here can generate one
-  without a local cargo, so CI re-resolves the graph on every run. That is not merely untidy: it is
-  how a vulnerable `time` was selected once already, and it means a green run does not pin what a
-  later run will build. Committing both lockfiles is the first thing to do once a toolchain is
-  available locally.
+* Both lockfiles are committed now, which they were not for a long time — CI re-resolved the graph
+  on every run, and that is how a vulnerable `time` was selected once already. Kept in the list
+  because the *reason* still applies: a green run has to pin what a later run will build.
 * `rust-version = "1.95"` is load-bearing, not decorative. cargo resolves to the newest versions the
   declared MSRV permits, so understating it makes cargo prefer *older* dependencies — including ones
   with unfixed advisories. The number must track what the tree actually requires.
@@ -208,3 +206,11 @@ Marked here so nobody mistakes them for finished design:
   first letter produced tabs labelled `sC:\Windows\...`. Both are fixed. What is still unverified is
   everything measured rather than merely present: pixel parity against `ui-parity.md`, behaviour at
   150% and 200% scaling, and font metrics under a different DPI.
+* **The two halves of the RDP process boundary have not been introduced.** `bestterm-rdp` connects,
+  decodes and publishes frames into shared memory; nothing in the host launches it, opens the mapping
+  or draws what is in it. Both sides speak the same protocol and neither has met the other, so none of
+  it has run end to end. The `Session` dialog says as much when an RDP session is accepted.
+* The RDP helper cannot send input. It reports that once, on the first input message, rather than
+  dropping events quietly — so a session is view-only and says so.
+* The vault has no OS keystore backend, so the master password is typed once per run of the
+  application rather than being unlocked from DPAPI or the Secret Service.

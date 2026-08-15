@@ -13,34 +13,48 @@ feature parity is a multi-year programme, not a quarter. Nothing below claims ot
 The phases below describe intent. This section describes the repository, because the two had drifted
 and nothing was recording the difference.
 
-**The binary contains almost none of the work.** `apps/bestterm` links `app-ui`, `eframe` and `egui`,
-and nothing else. `proto-ssh`, `core-model`, `config`, `core-vault` and `importers` are built and
-tested as libraries and are not in the executable at all. Quick connect writes a line to the log and
-clears the field; there is no session dialog. As a product, this is a local-shell terminal wearing the
-right chrome, with most of its controls inert.
+**Every crate is now in an executable.** That sentence was false for most of the project's life and
+was corrected twice after being claimed too early, so it is worth being precise about: `apps/bestterm`
+reaches `app-ui`, `ui-chrome`, `core-terminal`, `core-pty`, `term-render`, `transport`, `proto-ssh`,
+`core-model`, `config`, `core-vault` and `importers`; `helpers/rdp/apps/bestterm-rdp` reaches
+`proto-rdp`, `ipc-frame` and `surface`, which were the last two nothing linked. There is no longer a
+crate that is tested and unreachable.
 
-**Depth got ahead of integration.** Roughly 7,400 lines of protocol code and 6,450 of model,
-configuration, vault and importer code, all covered by tests — against about 2,560 lines of GUI that no
-test touches and that has never been run, because until now there was no local toolchain to open a
-window with.
+**The rhythm changed when there was a local toolchain.** For a long stretch CI was the only compiler
+and every mistake cost a round trip; a full build is now 36 seconds and an incremental one about five,
+which is why the last stretch of work is wiring rather than more libraries.
 
-Phase 2 is therefore about half done, and the missing half is the half a person can see:
+Phase 2, honestly:
 
 | Phase 2 item | State |
 |---|---|
-| Authentication, jump chains, `ssh_config`, `known_hosts` | done, tested against a real `sshd` |
-| `known_hosts` fingerprint confirmation UI | absent |
-| Keepalive and reconnect | absent |
+| Authentication, jump chains, `ssh_config`, `known_hosts` | done, verified against a real `sshd` |
+| `known_hosts` fingerprint confirmation UI | done |
+| Session tree with inheritance | done, and reachable: the sidebar opens saved sessions |
+| Vault | reachable; no OS keystore backend yet, so the master password is typed each session |
+| Local, remote and dynamic forwards | done, with a graphical manager |
+| Keepalive and death detection | done: 30s/3, and the reason a session ended reaches the tab |
+| Reconnect | **absent**, and see below — it is not a retry loop |
 | External-OpenSSH transport adapter | absent |
-| Session tree with inheritance | modelled and tested; not reachable from the app |
-| Vault | built and tested; not reachable from the app; no OS keystore backend |
-| Local, remote and dynamic forwards | protocol done; no graphical manager |
-| SSH session dialog | absent |
+| SSH session dialog | the dialog exists with all 15 protocol tabs; the per-protocol field sets are measured for Basic only |
 
-Phase 3 is similarly split: RDP has its configuration, server-key pinning and handshake, and no active
-stage, so no picture yet. VNC has not started.
+Phase 3: RDP has configuration, server-key pinning, the handshake, the active stage and a helper
+process, so frames are decoded and published. It cannot send input yet, so a session is view-only, and
+nothing in the host opens the helper — the two halves of the process boundary exist and have not been
+introduced. VNC has not started.
 
-The lesson worth keeping: a protocol crate passing its tests is not a feature. Wiring is the phase.
+**Why reconnect is not simply the next item.** A reconnect re-authenticates to a host named by a
+*string*, and that name is resolved afresh every time. Between the first connection and the reconnect,
+DNS, `/etc/hosts`, DHCP or a VPN can point it at a different machine — and an automatic reconnect
+would then offer the password or private key to whatever answered, unattended, with nobody reading a
+fingerprint. The current host key check would not catch it: it re-runs `known_hosts` *policy*, and the
+snapshot it holds does not contain a key accepted by prompt during this session. So reconnect needs
+pinning — compare against the key observed on the connection being replaced, and treat any difference
+as fatal rather than as a question — before it needs a retry timer. It is listed as absent rather than
+half-done for that reason.
+
+The lesson worth keeping from the middle of the project: a protocol crate passing its tests is not a
+feature. Wiring is the phase.
 
 ## Phase 0 — skeleton
 
