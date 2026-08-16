@@ -145,13 +145,33 @@ jobs:
       - name: Build (release, RDP helper)
         run: cargo build --manifest-path helpers/rdp/Cargo.toml --workspace --release
 
-      - name: Upload binary
+      # Both binaries, in one artifact and at its top level. `helper_path` looks for the helper
+      # beside the running executable and deliberately never on PATH, so an artifact carrying only
+      # `bestterm` is one where every RDP session reports the helper missing -- which is exactly what
+      # it said before this step listed the second file.
+      - name: Collect the binaries
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p dist
+          # Written with `if` rather than `[ -f x ] && cp`: Actions runs bash with errexit, and
+          # whether a failing test on the left of `&&` ends the step is exactly the kind of shell
+          # subtlety not worth relying on. One of the two suffixes exists on each runner.
+          for suffix in "" ".exe"; do
+            if [ -f "target/release/bestterm$suffix" ]; then
+              cp "target/release/bestterm$suffix" dist/
+            fi
+            if [ -f "helpers/rdp/target/release/bestterm-rdp$suffix" ]; then
+              cp "helpers/rdp/target/release/bestterm-rdp$suffix" dist/
+            fi
+          done
+          ls -l dist
+
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
           name: bestterm-${{ matrix.name }}
-          path: |
-            target/release/bestterm
-            target/release/bestterm.exe
+          path: dist/*
           if-no-files-found: error
           retention-days: 14
 
