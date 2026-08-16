@@ -38,10 +38,12 @@ Phase 2, honestly:
 | External-OpenSSH transport adapter | absent |
 | SSH session dialog | the dialog exists with all 15 protocol tabs; the per-protocol field sets are measured for Basic only |
 
-Phase 3: RDP has configuration, server-key pinning, the handshake, the active stage and a helper
-process, so frames are decoded and published. It cannot send input yet, so a session is view-only, and
-nothing in the host opens the helper — the two halves of the process boundary exist and have not been
-introduced. VNC has not started.
+Phase 3: RDP is built end to end — configuration, server-key pinning, the handshake, the active
+stage, the helper process, the process boundary, a pane that shows the frame, keyboard and mouse. It
+has never been run against a real RDP server, and that sentence is the important one: the parts are
+separately tested and jointly unproven, and the likely failure is in what they assume about each
+other rather than in any one of them. VNC has not started, though `helper-surface` is written so that
+its helper is a parameter rather than a special case.
 
 **Why reconnect is not simply the next item.** A reconnect re-authenticates to a host named by a
 *string*, and that name is resolved afresh every time. Between the first connection and the reconnect,

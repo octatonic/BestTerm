@@ -206,13 +206,16 @@ Marked here so nobody mistakes them for finished design:
   first letter produced tabs labelled `sC:\Windows\...`. Both are fixed. What is still unverified is
   everything measured rather than merely present: pixel parity against `ui-parity.md`, behaviour at
   150% and 200% scaling, and font metrics under a different DPI.
-* **The RDP boundary works; nothing draws through it yet.** `crates/helper-surface` launches
-  `bestterm-rdp`, speaks its protocol, opens the shared mapping and presents the whole thing as a
-  `GraphicalSurface`, and `crates/helper-surface/tests/boundary.rs` proves the two processes agree by
-  running them against each other. What is missing is above that: a tab holds a `TerminalTab` and
-  nothing else, so there is no pane that can show a frame. The `Session` dialog still refuses an RDP
-  session for that reason.
-* The RDP helper cannot send input. It reports that once, on the first input message, rather than
-  dropping events quietly — so a session is view-only and says so.
+* **RDP has never been run against a real server.** Every part of it exists — the handshake, the
+  active stage, the helper process, the boundary, a pane that shows the frame, keyboard and mouse —
+  and the only thing tested end to end is the process boundary, against a closed port. Nobody has
+  watched a desktop appear. Until somebody has, treat the parts as separately correct and jointly
+  unproven; the likely failure is not in any one of them but in what they assume about each other.
+* The RDP helper cannot send composed text or share the clipboard. Both are reported once per kind
+  rather than dropped quietly, so the gap is visible where it happens.
+* Keys arrive from egui, which has no scan code — only a key identity — so the mapping in
+  `app-ui/src/keymap.rs` covers the keys egui can name and no others. Caps Lock, Num Lock, Print
+  Screen, Pause, the context-menu key and the whole numeric keypad have no egui variant and therefore
+  cannot be forwarded at all.
 * The vault has no OS keystore backend, so the master password is typed once per run of the
   application rather than being unlocked from DPAPI or the Secret Service.
