@@ -67,6 +67,20 @@ const PIXEL_FORMAT: ironrdp_graphics::image_processing::PixelFormat =
 /// few dozen the bookkeeping outweighs the pixels saved.
 const MAX_DAMAGE_RECTS: usize = 48;
 
+/// Why an input event did not reach the server.
+///
+/// Two cases and not one, because they call for different answers: something this build cannot
+/// express is a gap to report once and carry on from, and a protocol failure has ended the session.
+#[derive(Debug, thiserror::Error)]
+pub enum InputError {
+    /// This build cannot express the event.
+    #[error("{0}")]
+    Unsendable(crate::input::Unsendable),
+    /// The session failed.
+    #[error(transparent)]
+    Rdp(RdpError),
+}
+
 /// Something the session produced.
 ///
 /// Deliberately in [`bestterm_surface`]'s vocabulary and not IronRDP's: this is what crosses the
@@ -253,7 +267,41 @@ impl ActiveSession {
             .stage
             .process(&mut self.image, action, &payload)
             .map_err(session_error)?;
+        self.apply(outputs).await
+    }
 
+    /// Send one input event to the server.
+    ///
+    /// Returns updates for the same reason [`ActiveSession::process`] does: with a software-rendered
+    /// pointer, moving the mouse changes the framebuffer, so an input event can produce damage.
+    ///
+    /// An event this build cannot express is reported rather than dropped. Silently swallowing a key
+    /// is how a keyboard develops a hole somebody discovers a week later.
+    pub async fn send_input(
+        &mut self,
+        event: &bestterm_surface::InputEvent,
+    ) -> Result<Vec<Update>, InputError> {
+        // Before the conversion and whatever it produces: this is what keeps a software-rendered
+        // cursor under the pointer, and IronRDP will not learn the position from the event itself.
+        if let bestterm_surface::InputEvent::PointerMove { x, y }
+        | bestterm_surface::InputEvent::PointerButton { x, y, .. } = event
+        {
+            self.stage.update_mouse_pos(
+                u16::try_from(*x).unwrap_or(u16::MAX),
+                u16::try_from(*y).unwrap_or(u16::MAX),
+            );
+        }
+
+        let converted = crate::input::convert(event).map_err(InputError::Unsendable)?;
+        let outputs = self
+            .stage
+            .process_fastpath_input(&mut self.image, &[converted])
+            .map_err(|err| InputError::Rdp(session_error(err)))?;
+        self.apply(outputs).await.map_err(InputError::Rdp)
+    }
+
+    /// Act on whatever IronRDP produced, from a PDU or from input.
+    async fn apply(&mut self, outputs: Vec<ActiveStageOutput>) -> Result<Vec<Update>, RdpError> {
         let mut updates = Vec::new();
         let mut damage: Vec<Rect> = Vec::new();
         let mut reactivate = false;

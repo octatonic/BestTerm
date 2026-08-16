@@ -28,6 +28,12 @@
 //! See [`trust`]. The store lives with the host and so does the person; what the helper owns is the
 //! moment at which asking is still useful, which is inside a handshake it is running.
 //!
+//! # Input
+//!
+//! Sent as it arrives. What this build cannot express — composed text, the clipboard — is reported
+//! once per kind rather than per event, because a key that does nothing should produce one line in
+//! the log and not one per press.
+//!
 //! # Failure is an exit
 //!
 //! There is no recovery here. A session that fails says so on stdout, then the process ends: the
@@ -43,6 +49,7 @@ use bestterm_ipc_frame::{
     ConnectRequest, FrameReady, HelperMessage, HostMessage, PROTOCOL_VERSION, SharedFrames,
     read_message, write_message,
 };
+use bestterm_proto_rdp::active::InputError;
 use bestterm_proto_rdp::{
     ActiveSession, KeyFingerprint, KnownServers, RdpError, ServerKeyChecker, Update,
 };
@@ -205,9 +212,10 @@ async fn serve(
     out: Arc<Mutex<Reporter>>,
 ) -> Result<(), Failure> {
     let mut frames = Frames::create(session.layout().size, &out)?;
-    // Said once and not per event: a mouse that does nothing should produce one line in the log, not
-    // one per movement.
-    let mut input_reported = false;
+    // Which kinds of input this build had to drop, so each is reported once rather than per event.
+    let mut unsendable = std::collections::HashSet::new();
+    // Updates produced by input rather than by a PDU, published on the way round the loop.
+    let mut pending: Vec<Update> = Vec::new();
 
     loop {
         let pdu = tokio::select! {
@@ -234,14 +242,28 @@ async fn serve(
                             report(&out, &HelperMessage::Error(err.to_string()));
                         }
                     }
-                    Some(HostMessage::Input(_)) => {
-                        if !input_reported {
-                            input_reported = true;
-                            let message =
-                                "this build cannot send input yet; the session is view-only"
-                                    .to_string();
-                            tracing::warn!("{message}");
-                            report(&out, &HelperMessage::Error(message));
+                    Some(HostMessage::Input(event)) => {
+                        match session.send_input(&event).await {
+                            Ok(updates) => pending.extend(updates),
+                            // A gap in what this build can express: said once, because a keyboard
+                            // that cannot type one key would otherwise fill the log with the same
+                            // line every time somebody pressed it.
+                            Err(InputError::Unsendable(what)) => {
+                                if unsendable.insert(std::mem::discriminant(&what)) {
+                                    tracing::warn!(%what, "rdp: dropped an input event");
+                                    report(&out, &HelperMessage::Error(what.to_string()));
+                                }
+                            }
+                            Err(InputError::Rdp(err)) => {
+                                let message = err.to_string();
+                                report(
+                                    &out,
+                                    &HelperMessage::Closed {
+                                        reason: Some(message.clone()),
+                                    },
+                                );
+                                return Err(Failure(message));
+                            }
                         }
                     }
                     Some(HostMessage::Connect(_)) => {
@@ -264,6 +286,16 @@ async fn serve(
             }
         };
 
+        // Input produced these while no PDU was being read; they are published on the same path as
+        // everything else rather than on one of their own.
+        if !pending.is_empty() {
+            let updates = std::mem::take(&mut pending);
+            if publish(&mut frames, &session, &out, updates)? {
+                return Ok(());
+            }
+            flush(&out);
+        }
+
         // Outside the select!, where it cannot be abandoned part-way.
         let Some(pdu) = pdu else { continue };
         let updates = match session.process(pdu).await {
@@ -280,22 +312,35 @@ async fn serve(
             }
         };
 
-        for update in updates {
-            match update {
-                Update::Frame { damage } => frames.publish(&session, damage, &out)?,
-                Update::Resized(size) => {
-                    frames.fit(size, &out)?;
-                    report(&out, &HelperMessage::Resized(size));
-                }
-                Update::Cursor(shape) => report(&out, &HelperMessage::Cursor(shape)),
-                Update::Closed { reason } => {
-                    report(&out, &HelperMessage::Closed { reason });
-                    return Ok(());
-                }
-            }
+        if publish(&mut frames, &session, &out, updates)? {
+            return Ok(());
         }
         flush(&out);
     }
+}
+
+/// Send a batch of updates to the host. Returns true when the session has ended.
+fn publish(
+    frames: &mut Frames,
+    session: &ActiveSession,
+    out: &Mutex<Reporter>,
+    updates: Vec<Update>,
+) -> Result<bool, Failure> {
+    for update in updates {
+        match update {
+            Update::Frame { damage } => frames.publish(session, damage, out)?,
+            Update::Resized(size) => {
+                frames.fit(size, out)?;
+                report(out, &HelperMessage::Resized(size));
+            }
+            Update::Cursor(shape) => report(out, &HelperMessage::Cursor(shape)),
+            Update::Closed { reason } => {
+                report(out, &HelperMessage::Closed { reason });
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// The shared mapping, and the generation counter that goes with it.

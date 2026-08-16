@@ -246,14 +246,26 @@ pub struct Modifiers {
 
 /// Input travelling towards the remote end.
 ///
-/// Keys are carried as physical scancodes rather than characters: both RDP and VNC want the
-/// hardware key, and the remote host applies its own keyboard layout. Sending characters instead is
-/// the classic source of "my keyboard layout is wrong over RDP" bugs.
+/// Keys are carried as physical scancodes rather than characters: both RDP and VNC want the hardware
+/// key, and the remote host applies its own keyboard layout. Sending characters instead is the
+/// classic source of "my keyboard layout is wrong over RDP" bugs.
+///
+/// # Which scancodes
+///
+/// PC scan code set 1 — the make codes an IBM PC/XT keyboard produced and the ones RDP has carried
+/// ever since. Keys that a real keyboard prefixes with `0xE0` are carried as `0x100 | code`: the
+/// right-hand Control is `0x11D` rather than `0x1D`, which is the left-hand one. This had said "USB
+/// HID usage / RDP scancode", which are two different numbering schemes, and a contract that names
+/// two answers has none — a right Alt would have arrived as a left Alt, or as nothing.
+///
+/// Set 1 rather than HID because it is what RDP puts on the wire unchanged. VNC wants X keysyms and
+/// converts through a table either way, so nothing is saved by meeting it halfway, and the conversion
+/// is better done in the backend that needs it than in every producer.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
     /// A key transition, identified by its position on the keyboard.
     Key {
-        /// Platform-independent scancode (USB HID usage / RDP scancode).
+        /// PC scan code set 1, with extended keys as `0x100 | code`. See the type's documentation.
         scancode: u32,
         /// True on press, false on release.
         pressed: bool,

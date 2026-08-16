@@ -26,10 +26,12 @@
 
 pub mod active;
 pub mod config;
+pub mod input;
 pub mod server_key;
 pub mod session;
 
 pub use active::{ActiveSession, FrameLayout, Pdu, Update};
 pub use config::{ConfigError, MAX_DIMENSION, MIN_DIMENSION};
+pub use input::Unsendable;
 pub use server_key::{KeyFingerprint, KnownServers, ServerKeyChecker, Verdict};
 pub use session::{Connected, RdpError, connect};
