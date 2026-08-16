@@ -12,12 +12,44 @@ Layout and interaction patterns are not protectable, and reproducing them is the
 project.
 
 **Out of scope, permanently:** MobaXterm's icons, artwork, bitmaps, cursors, sounds, wording of its
-help text, and its name. These are copyrighted or trademarked. BestTerm ships its own icon set from a
-permissively licensed family (Papirus / Tabler / Lucide) and its own strings.
+help text, and its name. These are copyrighted or trademarked, and this repository is public and
+GPL-3.0, so it could not carry them even privately.
+
+BestTerm draws its own icons instead — [`crates/ui-chrome/src/icons.rs`](../crates/ui-chrome/src/icons.rs),
+as vector shapes in code rather than a bundled set. That was chosen over Papirus, Tabler or Lucide,
+which the plan originally named: there is no asset to license or attribute, they stay sharp at any
+scale and any DPI, and it matches the decision already made for the theme, where every pixel of chrome
+is ours. The cost is that each icon is a few lines of geometry.
+
+What *is* copied from the reference is what each icon depicts and roughly its colour — a yellow star
+for saved sessions, crossed tools for the tool box, two blue cogs for settings. That is the part
+somebody recognises without reading, and it is an idea rather than an expression of one.
 
 `ImgNum` values in imported `.mxtsessions` files are mapped to BestTerm icons through
 [`crates/importers`](../crates/importers) so that imported trees keep their visual distinctions
 without reusing any original artwork. That mapping table lives with the importer, not here.
+
+## Configuration dialog
+
+Measured from a screenshot of MobaXterm Professional 26.4.0.5512. Implemented in
+[`crates/ui-chrome/src/configuration.rs`](../crates/ui-chrome/src/configuration.rs).
+
+| Element | Measured |
+|---|---|
+| Title | `MobaXterm Configuration` → ours reads `BestTerm Configuration` |
+| Tabs | Seven: General, Terminal, X11, SSH, Display, Toolbar, Misc — each with an icon left of its label |
+| General: path rows | Three, each a bordered row: `Terminal home directory:`, `Terminal root (/) directory:`, `Default text editor program:`, with a field and two small buttons |
+| General: link group | A bordered group of five clickable rows, centred: Windows right-click menu entries · keyboard shortcuts · passwords management · Manage my shared sessions · Edit my sessions presets |
+| General: checkbox | `Automatically backup … configuration file`, on by default |
+| Foot | One `OK` button, centred, outside the tab area |
+
+The other six tabs are named and deliberately empty: their contents have not been measured. An empty
+tab says so. Inventing plausible settings would produce a dialog that looks finished and disagrees
+with the reference in ways nobody would think to check.
+
+Two of the five link rows name the product in the reference. Ours name BestTerm, because the name is
+a trademark; the three that name no product are left exactly as measured, and a test asserts that
+nothing visible in the dialog carries the other product's name.
 
 ## How to fill in the measurements
 

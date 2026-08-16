@@ -120,6 +120,8 @@ pub struct BestTermApp {
     next_connection: u64,
     /// Port forwarding: the window, the form and what is running.
     tunnels: tunnels::TunnelState,
+    /// The Configuration dialog, whether or not it is on screen.
+    configuration: bestterm_ui_chrome::configuration::Configuration,
 }
 
 impl Default for BestTermApp {
@@ -211,6 +213,7 @@ impl BestTermApp {
             connections: Vec::new(),
             next_connection: 1,
             tunnels: tunnels::TunnelState::default(),
+            configuration: bestterm_ui_chrome::configuration::Configuration::default(),
         }
     }
 
@@ -286,6 +289,7 @@ impl BestTermApp {
                 }
                 ChromeAction::SelectTab(_) => {}
                 ChromeAction::CloseTab(index) => self.close_tab(index),
+                ChromeAction::OpenConfiguration => self.configuration.open = true,
                 ChromeAction::OpenTunnels => {
                     self.tunnels.open = true;
                     // Pre-selected when there is only one candidate, because choosing between one
@@ -1021,6 +1025,43 @@ impl BestTermApp {
         }
     }
 
+    /// The Configuration dialog, and what its rows open.
+    fn configuration_dialog(&mut self, ctx: &egui::Context) {
+        use bestterm_ui_chrome::configuration::{ConfigAction, ConfigField, ConfigLink};
+
+        for action in self.configuration.show(ctx, &self.theme) {
+            match action {
+                // The one row that already has somewhere to go. The vault is the passwords, so this
+                // is not a placeholder standing in for one.
+                ConfigAction::Open(ConfigLink::Passwords) => {
+                    self.vault.ask(self.store.as_ref(), None);
+                }
+                ConfigAction::Open(link) => {
+                    self.notices
+                        .push(format!("\"{}\" has nothing behind it yet", link.label()));
+                }
+                // Picking a directory needs a file dialog, which is a dependency this build does not
+                // have. Said plainly rather than doing nothing: a button that silently does nothing
+                // reads as a bug in the button.
+                ConfigAction::Browse(field) => {
+                    self.notices.push(format!(
+                        "there is no folder picker yet — type the path for {}",
+                        field.label().trim_end_matches(':')
+                    ));
+                }
+                ConfigAction::Reset(field) => match field {
+                    ConfigField::Home => self.configuration.home.clear(),
+                    ConfigField::Root => self.configuration.root.clear(),
+                    ConfigField::Editor => self.configuration.editor.clear(),
+                },
+                // Nothing in it is persisted yet, which is phase 1's configuration work rather than
+                // this dialog's. Accepting closes it and keeps what was typed for this run.
+                ConfigAction::Accepted => tracing::debug!("configuration accepted"),
+                ConfigAction::Cancelled => tracing::debug!("configuration dismissed"),
+            }
+        }
+    }
+
     /// Read a `.mxtsessions` file into the tree and save it.
     ///
     /// Every count is reported, including the ones that are zero. An import that silently dropped a
@@ -1481,6 +1522,7 @@ impl eframe::App for BestTermApp {
         self.vault_prompt(&ctx);
         self.notice_window(&ctx);
         self.server_key_prompt(&ctx);
+        self.configuration_dialog(&ctx);
         self.tunnel_window(&ctx);
 
         if let Some(index) = requested_shell {

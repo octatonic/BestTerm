@@ -15,6 +15,8 @@
 //! have no implementation yet report [`ChromeAction::Unimplemented`] instead of silently doing
 //! nothing.
 
+pub mod configuration;
+pub mod icons;
 pub mod session_dialog;
 pub mod theme;
 
@@ -226,6 +228,8 @@ pub enum ChromeAction {
     OpenSessionDialog,
     /// Open the port forwarding window.
     OpenTunnels,
+    /// Open the configuration dialog.
+    OpenConfiguration,
     /// Quit the application.
     Quit,
     /// A control that exists in the layout but has no behaviour yet.
@@ -308,8 +312,32 @@ fn menu_action(menu: &'static str, item: &'static str) -> ChromeAction {
     match (menu, item) {
         ("Terminal", "New local shell") => ChromeAction::NewLocalShell,
         ("Sessions", "New session…") => ChromeAction::OpenSessionDialog,
+        ("Settings", _) => ChromeAction::OpenConfiguration,
         ("View", "Toggle sidebar") => ChromeAction::ToggleSidebar,
         _ => ChromeAction::Unimplemented(item),
+    }
+}
+
+/// Which icon a ribbon button carries.
+///
+/// Beside [`ribbon_action`] because the two are the same list read two ways, and a button that gained
+/// one without the other would either do nothing or look like nothing.
+fn ribbon_icon(label: &str) -> icons::Icon {
+    match label {
+        "Session" => icons::Icon::Session,
+        "Servers" => icons::Icon::Servers,
+        "Tools" => icons::Icon::Tools,
+        "Sessions" => icons::Icon::Sessions,
+        "View" => icons::Icon::View,
+        "Split" => icons::Icon::Split,
+        "MultiExec" => icons::Icon::MultiExec,
+        "Tunneling" => icons::Icon::Tunneling,
+        "Packages" => icons::Icon::Packages,
+        "Settings" => icons::Icon::Settings,
+        "X server" => icons::Icon::XServer,
+        "Exit" => icons::Icon::Exit,
+        // Help, and anything a future button is called before it has a picture of its own.
+        _ => icons::Icon::Help,
     }
 }
 
@@ -347,14 +375,8 @@ fn ribbon_icon_button(ui: &mut Ui, theme: &ChromeTheme, label: &str) -> Response
         } else if response.hovered() {
             painter.rect_filled(rect, CornerRadius::ZERO, theme.hover_bg);
         }
-        // The same hollow square the rest of the unfinished interface uses.
         let icon = Rect::from_center_size(rect.center(), vec2(24.0, 24.0));
-        painter.rect_stroke(
-            icon,
-            CornerRadius::ZERO,
-            Stroke::new(1.0, theme.text_dim),
-            egui::StrokeKind::Inside,
-        );
+        icons::draw(painter, icon, ribbon_icon(label));
     }
 
     // Without a label the button is a mystery box, so the name has to be reachable somehow.
@@ -365,6 +387,7 @@ fn ribbon_action(label: &'static str) -> ChromeAction {
     match label {
         "Session" => ChromeAction::OpenSessionDialog,
         "Tunneling" => ChromeAction::OpenTunnels,
+        "Settings" => ChromeAction::OpenConfiguration,
         "Exit" => ChromeAction::Quit,
         other => ChromeAction::Unimplemented(other),
     }
@@ -384,15 +407,11 @@ const QUICK_CONNECT_WIDTH: f32 = 333.0;
 ///
 /// One function for both the ribbon and the tab bar, so the unfinished parts of the interface look
 /// unfinished in the same way rather than in two different ways.
-fn icon_placeholder(ui: &mut Ui, theme: &ChromeTheme, side: f32) {
+/// The little protocol icon on a tab.
+fn tab_icon(ui: &mut Ui, side: f32, protocol: &str) {
     let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
     if ui.is_rect_visible(rect) {
-        ui.painter().rect_stroke(
-            rect,
-            CornerRadius::ZERO,
-            Stroke::new(1.0, theme.text_dim),
-            egui::StrokeKind::Inside,
-        );
+        icons::draw(ui.painter(), rect, icons::Icon::for_protocol(protocol));
     }
 }
 
@@ -419,12 +438,7 @@ fn ribbon_button(ui: &mut Ui, theme: &ChromeTheme, label: &str) -> Response {
             pos2(rect.center().x, rect.top() + 4.0 + icon_side / 2.0),
             vec2(icon_side, icon_side),
         );
-        painter.rect_stroke(
-            icon,
-            CornerRadius::ZERO,
-            Stroke::new(1.0, theme.text_dim),
-            egui::StrokeKind::Inside,
-        );
+        icons::draw(painter, icon, ribbon_icon(label));
 
         painter.text(
             pos2(rect.center().x, icon.bottom() + 2.0),
@@ -589,7 +603,7 @@ fn tab_widget(ui: &mut Ui, theme: &ChromeTheme, tab: &TabInfo, active: bool) -> 
                         // be the protocol's first letter, which produced tabs labelled
                         // "sC:\Windows\..." -- a placeholder that looks like corruption is worse
                         // than one that looks like a placeholder.
-                        icon_placeholder(ui, theme, TAB_ICON_SIZE);
+                        tab_icon(ui, TAB_ICON_SIZE, &tab.protocol);
                         ui.add_space(4.0);
                         let label = ui.label(&tab.title);
                         if let Some(program) = &tab.program_title {
@@ -718,6 +732,7 @@ mod tests {
         assert_eq!(ribbon_action("Exit"), ChromeAction::Quit);
         assert_eq!(ribbon_action("Session"), ChromeAction::OpenSessionDialog);
         assert_eq!(ribbon_action("Tunneling"), ChromeAction::OpenTunnels);
+        assert_eq!(ribbon_action("Settings"), ChromeAction::OpenConfiguration);
     }
 
     #[test]
