@@ -1,7 +1,7 @@
 //! Turning [`bestterm_surface::InputEvent`] into what RDP puts on the wire.
 //!
 //! All of it goes as fast-path input, which is what every RDP server since Windows Server 2003 wants
-//! and what IronRDP's [`ActiveStage::process_fastpath_input`] takes.
+//! and what IronRDP's [`ironrdp_session::ActiveStage::process_fastpath_input`] takes.
 //!
 //! # Keys
 //!
