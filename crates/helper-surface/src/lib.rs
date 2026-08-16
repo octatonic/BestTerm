@@ -9,10 +9,15 @@
 //!
 //! # Threads
 //!
-//! One, per surface, reading the helper's stdout. It turns each message into a [`SurfaceEvent`] and
-//! sends it down a channel the interface drains. Writing happens on whichever thread calls, under a
-//! lock, because the messages are small and a lock held for the length of a `write_all` is cheaper
-//! than another thread to own the pipe.
+//! One, per surface, reading the helper's stdout. It turns each message into a [`SurfaceEvent`],
+//! sends it down a channel the interface drains, and then asks the interface to draw. Writing happens
+//! on whichever thread calls, under a lock, because the messages are small and a lock held for the
+//! length of a `write_all` is cheaper than another thread to own the pipe.
+//!
+//! The wake happens here, on the thread that already has the event, and *after* the send — so a frame
+//! that starts in response to it always finds the event queued. It cannot be done on the reading side
+//! instead: a channel has no way to look at what is in it without taking it, so a thread that waited
+//! on the channel purely to wake somebody would consume the very events it was announcing.
 //!
 //! # What happens when the helper dies
 //!
@@ -107,6 +112,7 @@ pub fn connect(
     kind: SurfaceKind,
     label: String,
     request: ConnectRequest,
+    waker: Waker,
 ) -> Result<(HelperSurface, EventReceiver<SurfaceEvent>)> {
     let mut child = Command::new(helper)
         .stdin(Stdio::piped())
@@ -139,7 +145,7 @@ pub fn connect(
         let label = label.clone();
         std::thread::Builder::new()
             .name(format!("helper-{}", kind.id()))
-            .spawn(move || read_from_helper(BufReader::new(stdout), frame, events_tx, label))
+            .spawn(move || read_from_helper(BufReader::new(stdout), frame, events_tx, waker, label))
             // A surface whose reader could not start would produce no frames and no errors, which
             // looks exactly like a server that never answers.
             .expect("the helper reader thread must start");
@@ -158,11 +164,18 @@ pub fn connect(
     ))
 }
 
+/// Something that asks the interface to draw a frame.
+///
+/// A closure rather than the windowing type, so this crate says what it needs — "wake up" — without
+/// naming who provides it. The same shape the terminal side uses, for the same reason.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
 /// Turn the helper's messages into surface events until it stops.
 fn read_from_helper(
     mut stdout: BufReader<std::process::ChildStdout>,
     frame: Arc<Mutex<Frame>>,
     events: crossbeam_channel::Sender<SurfaceEvent>,
+    waker: Waker,
     label: String,
 ) {
     let mut buf = Vec::new();
@@ -257,11 +270,12 @@ fn read_from_helper(
                     }
                 };
 
-                if let Some(generation) = copied
-                    && events.send(SurfaceEvent::Frame(meta)).is_err()
-                {
-                    tracing::debug!(%label, generation, "nobody is reading this surface any more");
-                    return;
+                if let Some(generation) = copied {
+                    if events.send(SurfaceEvent::Frame(meta)).is_err() {
+                        tracing::debug!(%label, generation, "nobody is reading this surface");
+                        return;
+                    }
+                    waker();
                 }
             }
 
@@ -269,16 +283,19 @@ fn read_from_helper(
                 if events.send(SurfaceEvent::Resized(size)).is_err() {
                     return;
                 }
+                waker();
             }
             HelperMessage::Cursor(shape) => {
                 if events.send(SurfaceEvent::Cursor(shape)).is_err() {
                     return;
                 }
+                waker();
             }
             HelperMessage::ClipboardOffer(text) => {
                 if events.send(SurfaceEvent::ClipboardOffer(text)).is_err() {
                     return;
                 }
+                waker();
             }
             HelperMessage::AskAboutServerKey {
                 host,
@@ -297,6 +314,7 @@ fn read_from_helper(
                 {
                     return;
                 }
+                waker();
             }
             HelperMessage::ServerKey { fingerprint, store } => {
                 if events
@@ -305,11 +323,13 @@ fn read_from_helper(
                 {
                     return;
                 }
+                waker();
             }
             HelperMessage::Error(detail) => {
                 if events.send(SurfaceEvent::Error(detail)).is_err() {
                     return;
                 }
+                waker();
             }
             HelperMessage::Closed { reason } => {
                 closed_with = Some(reason);
@@ -323,6 +343,7 @@ fn read_from_helper(
     let _ = events.send(SurfaceEvent::Closed {
         reason: closed_with.flatten(),
     });
+    waker();
 }
 
 impl HelperSurface {

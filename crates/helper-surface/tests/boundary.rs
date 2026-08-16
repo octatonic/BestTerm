@@ -72,12 +72,22 @@ fn the_helper_starts_reads_our_request_and_reports_back() {
         return;
     };
 
+    let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (mut surface, events) = bestterm_helper_surface::connect(
         &helper,
         SurfaceKind::Rdp,
         "boundary test".to_string(),
         // Port 1 is reserved and nothing binds it, so this is refused rather than answered.
         request(1),
+        // The wake-ups are counted rather than drawn, which is the one thing a test can check about
+        // them: a surface that never asks for a repaint is a tab that stays blank until the mouse
+        // moves over it, and that bug has already happened once on the terminal side.
+        {
+            let wakes = std::sync::Arc::clone(&wakes);
+            std::sync::Arc::new(move || {
+                wakes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+        },
     )
     .expect("the helper starts");
 
@@ -107,6 +117,11 @@ fn the_helper_starts_reads_our_request_and_reports_back() {
         "nothing was connected, so nothing should have drawn: {seen:?}"
     );
 
+    assert!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "the surface has to ask for a repaint, or nothing would ever draw what it reported"
+    );
+
     // Idempotent, and safe on a helper that has already exited.
     surface.shutdown().expect("shutting down twice is allowed");
     surface.shutdown().expect("shutting down twice is allowed");
@@ -122,6 +137,7 @@ fn a_missing_helper_is_an_error_and_not_a_panic() {
         SurfaceKind::Rdp,
         "missing".to_string(),
         request(1),
+        std::sync::Arc::new(|| {}),
     )
     .expect_err("there is no helper there");
     assert!(

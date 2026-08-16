@@ -3,7 +3,10 @@
 //! This is the only crate that knows about all the others. Everything below it is independently
 //! testable, which is the point — see `docs/ARCHITECTURE.md`.
 
+mod keymap;
+mod pane;
 mod ssh;
+mod surface_tab;
 mod tab;
 mod tunnels;
 mod vault;
@@ -46,13 +49,23 @@ const UI_STATE_VARIABLE: &str = "BESTTERM_UI_STATE";
 /// configuration setting in phase 1.
 const SCROLLBACK: usize = 10_000;
 
+/// The RDP helper's file name, without a platform suffix.
+const RDP_HELPER: &str = "bestterm-rdp";
+
+/// Where accepted RDP server keys are recorded.
+///
+/// Its own file rather than a section of the configuration: it is a log that is appended to, people
+/// edit it by hand when a server is rebuilt, and mixing it into a file this program rewrites would
+/// mean their edits competing with its serialisation.
+const RDP_KNOWN_SERVERS: &str = "known_servers";
+
 /// The application.
 pub struct BestTermApp {
     theme: ChromeTheme,
     term_style: TerminalStyle,
     metrics: TerminalMetrics,
     chrome: ChromeState,
-    tabs: Vec<TerminalTab>,
+    tabs: Vec<pane::Pane>,
     shells: Vec<ShellProfile>,
     palette: Palette,
     theme_installed: bool,
@@ -219,7 +232,7 @@ impl BestTermApp {
         };
         match TerminalTab::spawn(profile, cols, rows, SCROLLBACK, self.palette.clone(), waker) {
             Ok(tab) => {
-                self.tabs.push(tab);
+                self.tabs.push(pane::Pane::Terminal(Box::new(tab)));
                 self.chrome.active_tab = self.tabs.len() - 1;
             }
             Err(err) => {
@@ -234,7 +247,7 @@ impl BestTermApp {
             return;
         }
         let mut tab = self.tabs.remove(index);
-        let connection = tab.connection;
+        let connection = tab.connection();
         tab.shutdown();
 
         // A connection ends when its last window does. Anything still running over it -- today the
@@ -242,7 +255,7 @@ impl BestTermApp {
         // window that could show it is a listening socket nobody knows about, still carrying traffic
         // into a network somebody believes they have left.
         if let Some(id) = connection
-            && !self.tabs.iter().any(|other| other.connection == Some(id))
+            && !self.tabs.iter().any(|other| other.connection() == Some(id))
         {
             self.tunnels.stop_all_over(&self.runtime, id);
             self.connections.retain(|live| live.id != id);
@@ -256,10 +269,10 @@ impl BestTermApp {
     /// Move output from every transport into its emulator, and answers back the other way.
     ///
     /// Returns true if anything changed and the UI should repaint.
-    fn pump(&mut self) -> bool {
+    fn pump(&mut self, ctx: &egui::Context) -> bool {
         let mut changed = false;
         for tab in &mut self.tabs {
-            changed |= tab.pump();
+            changed |= tab.pump(ctx);
         }
         changed
     }
@@ -389,6 +402,201 @@ impl BestTermApp {
         );
     }
 
+    /// Open a remote desktop by launching the helper process.
+    ///
+    /// Unlike SSH, none of this happens on the runtime: the helper is a process, and everything slow
+    /// about the connection happens inside it. What is done here is a spawn and a write.
+    fn connect_rdp(&mut self, config: bestterm_core_model::RdpConfig, ctx: &egui::Context) {
+        let helper = match bestterm_helper_surface::helper_path(RDP_HELPER) {
+            Ok(path) if path.is_file() => path,
+            Ok(path) => {
+                // Said with the path in it. "The helper is missing" sends somebody looking in the
+                // wrong place; the path says which directory is short of a file.
+                self.notices.push(format!(
+                    "the RDP helper is not installed beside this program (looked for {})",
+                    path.display()
+                ));
+                return;
+            }
+            Err(error) => {
+                self.notices.push(format!(
+                    "could not work out where the RDP helper is: {error}"
+                ));
+                return;
+            }
+        };
+
+        let user = config.user.clone().unwrap_or_default();
+        let label = if user.is_empty() {
+            config.host.clone()
+        } else {
+            format!("{user}@{}", config.host)
+        };
+
+        // The password is not read from the vault here. An RDP session with no stored credential is
+        // one where Windows asks at its own login screen, which works; reaching into the vault
+        // without being asked would unlock it for a session that may not need it.
+        let request = bestterm_ipc_frame::ConnectRequest {
+            host: config.host.clone(),
+            port: config.port,
+            username: user,
+            domain: config.domain.clone().filter(|d| !d.is_empty()),
+            password: bestterm_core_vault::Secret::new(String::new()),
+            desktop_size: bestterm_surface::FrameSize::new(1280, 800),
+            enable_credssp: true,
+            keyboard_layout: 0,
+            client_name: "BestTerm".to_string(),
+            known_server_key: self.known_server_key(&config.host, config.port),
+        };
+
+        let waker = {
+            let ctx = ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint()) as bestterm_helper_surface::Waker
+        };
+
+        match bestterm_helper_surface::connect(
+            &helper,
+            bestterm_surface::SurfaceKind::Rdp,
+            label.clone(),
+            request,
+            waker,
+        ) {
+            Ok((surface, events)) => {
+                let tab = crate::surface_tab::SurfaceTab::adopt(Box::new(surface), events, label);
+                self.tabs.push(pane::Pane::Surface(Box::new(tab)));
+                self.chrome.active_tab = self.tabs.len() - 1;
+            }
+            Err(error) => self.notices.push(format!("{label}: {error}")),
+        }
+    }
+
+    /// The key recorded for an RDP server, if one is.
+    ///
+    /// Read on every connection rather than cached: the file is small, it is the person's to edit,
+    /// and a cache would mean a key removed by hand went on being trusted.
+    fn known_server_key(&self, host: &str, port: u16) -> Option<String> {
+        let store = self.store.as_ref()?;
+        let text =
+            std::fs::read_to_string(store.paths().config_dir().join(RDP_KNOWN_SERVERS)).ok()?;
+        let wanted = format!("{}:{port}", host.to_ascii_lowercase());
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            match (fields.next(), fields.next(), fields.next()) {
+                (Some(address), Some(algorithm), Some(digest))
+                    if address == wanted && algorithm.eq_ignore_ascii_case("sha256") =>
+                {
+                    return Some(digest.to_string());
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Write down a key an RDP session settled on.
+    fn record_server_key(&mut self, host: &str, port: u16, digest: &str) {
+        let Some(store) = self.store.as_ref() else {
+            self.notices.push(
+                "the server's key was accepted but there is nowhere to record it".to_string(),
+            );
+            return;
+        };
+        let path = store.paths().config_dir().join(RDP_KNOWN_SERVERS);
+        let line = format!("{}:{port} sha256 {digest}\n", host.to_ascii_lowercase());
+        // Appended, like `known_hosts`: the file is a log of decisions, and rewriting it would mean
+        // this program deciding which of somebody's earlier decisions still count.
+        let written = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
+        if let Err(error) = written {
+            self.notices
+                .push(format!("could not record the server's key: {error}"));
+        }
+    }
+
+    /// Ask about a server key a desktop is waiting on, and record what a desktop settled.
+    ///
+    /// Drained here rather than inside the tab because both ends of it belong to the application: the
+    /// window is the application's, and so is the file the answer is written to.
+    fn server_key_prompt(&mut self, ctx: &egui::Context) {
+        let mut settled = Vec::new();
+        let mut question = None;
+
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            let Some(surface) = tab.surface_mut() else {
+                continue;
+            };
+            if let Some((digest, store)) = surface.settled_key.take()
+                && store
+            {
+                settled.push((index, digest));
+            }
+            // One at a time, and the active tab's first. Two questions about two different servers,
+            // stacked, is how somebody accepts the wrong one.
+            if question.is_none()
+                && let Some(asked) = surface.question.clone()
+            {
+                question = Some((index, asked));
+            }
+        }
+
+        for (index, digest) in settled {
+            if let Some(asked) = self.tabs.get(index).map(pane::Pane::title) {
+                let (host, port) = split_host_port(&asked);
+                self.record_server_key(&host, port, &digest);
+            }
+        }
+
+        let Some((index, asked)) = question else {
+            return;
+        };
+
+        let mut answer = None;
+        egui::Modal::new(egui::Id::new("rdp-server-key")).show(ctx, |ui| {
+            ui.set_width(520.0);
+            ui.heading(match asked.expected {
+                Some(_) => "This server's key has changed",
+                None => "This server has not been seen before",
+            });
+            ui.add_space(8.0);
+            ui.label(format!("{}:{}", asked.host, asked.port));
+            ui.add_space(6.0);
+            ui.label(format!("Presented: {}", asked.fingerprint));
+            if let Some(expected) = &asked.expected {
+                ui.label(format!("Expected:  {expected}"));
+                ui.add_space(6.0);
+                // Stated rather than implied. A changed key is either a rebuild somebody did or a
+                // machine answering that should not be, and only the person knows which.
+                ui.colored_label(
+                    egui::Color32::from_rgb(0xB0, 0x20, 0x20),
+                    "Something is answering for this address that was not answering for it before. \
+                     If nobody rebuilt this server, do not continue.",
+                );
+            }
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("Connect").clicked() {
+                    answer = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+
+        if let Some(accept) = answer
+            && let Some(surface) = self.tabs.get_mut(index).and_then(pane::Pane::surface_mut)
+        {
+            surface.answer_server_key(accept);
+        }
+    }
+
     /// Take whatever the runtime has reported since the last frame.
     fn drain_sessions(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.sessions.1.try_recv() {
@@ -431,7 +639,7 @@ impl BestTermApp {
                         owner: Some(Box::new(session)),
                     });
                     tab.connection = Some(id);
-                    self.tabs.push(tab);
+                    self.tabs.push(pane::Pane::Terminal(Box::new(tab)));
                     self.chrome.active_tab = self.tabs.len() - 1;
                 }
                 SessionEvent::Failed { title, reason } => {
@@ -997,6 +1205,7 @@ impl BestTermApp {
         match outcome {
             DialogOutcome::Accepted(config) => match *config {
                 bestterm_core_model::ProtocolConfig::Ssh(ssh) => self.connect_ssh(ssh, ctx),
+                bestterm_core_model::ProtocolConfig::Rdp(rdp) => self.connect_rdp(rdp, ctx),
                 other => {
                     self.notices.push(format!(
                         "{} sessions cannot be opened yet",
@@ -1022,7 +1231,7 @@ impl BestTermApp {
             .map(|tab| TabInfo {
                 title: tab.title(),
                 program_title: tab.program_title(),
-                protocol: tab.protocol().to_string(),
+                protocol: tab.protocol(),
                 tint: None,
             })
             .collect();
@@ -1080,6 +1289,17 @@ impl BestTermApp {
 
         let Some(tab) = self.tabs.get_mut(self.chrome.active_tab) else {
             return;
+        };
+
+        // The one place that legitimately branches on what a pane holds: a grid of glyphs and a
+        // texture are different work, and generalising over them would mean an abstraction whose only
+        // two implementations share nothing.
+        let tab = match tab {
+            pane::Pane::Surface(surface) => {
+                surface.show(ui);
+                return;
+            }
+            pane::Pane::Terminal(terminal) => terminal,
         };
 
         tab.resize(cols, rows, cell);
@@ -1172,7 +1392,7 @@ impl eframe::App for BestTermApp {
         }
 
         self.drain_sessions(&ctx);
-        let output_arrived = self.pump();
+        let output_arrived = self.pump(&ctx);
         self.sync_chrome();
 
         let mut actions: Vec<ChromeAction> = Vec::new();
@@ -1260,6 +1480,7 @@ impl eframe::App for BestTermApp {
         self.host_key_prompt(&ctx);
         self.vault_prompt(&ctx);
         self.notice_window(&ctx);
+        self.server_key_prompt(&ctx);
         self.tunnel_window(&ctx);
 
         if let Some(index) = requested_shell {
@@ -1443,6 +1664,22 @@ fn parse_quick_connect(text: &str) -> Option<bestterm_core_model::SshConfig> {
         user,
         ..bestterm_core_model::SshConfig::default()
     })
+}
+
+/// Split `user@host` or `host` back into a host and a port.
+///
+/// The label is what the tab is called, which is what the session was named, so this recovers the
+/// address to record a key against. A port is only ever in it when the session carried one.
+fn split_host_port(label: &str) -> (String, u16) {
+    let host = label.rsplit('@').next().unwrap_or(label);
+    match host.rsplit_once(':') {
+        Some((name, port)) => match port.parse() {
+            Ok(port) => (name.to_string(), port),
+            // A colon that is not a port is part of an IPv6 address.
+            Err(_) => (host.to_string(), 3389),
+        },
+        None => (host.to_string(), 3389),
+    }
 }
 
 /// Whether a string could be a host name or an address.
