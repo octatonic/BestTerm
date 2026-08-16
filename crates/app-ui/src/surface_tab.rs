@@ -65,6 +65,14 @@ pub(crate) struct SurfaceTab {
     pub(crate) settled_key: Option<(String, bool)>,
     /// Problems the session survived, newest last.
     pub(crate) notices: Vec<String>,
+    /// Whether keys typed into the window go to the remote desktop.
+    ///
+    /// Tracked here rather than read from egui's focus. A widget's focus depends on whether egui
+    /// considers it focusable, which for an image with a click sense is not something to rely on
+    /// without watching it happen — and getting it wrong means either a desktop that cannot be typed
+    /// into at all, or one that swallows every keystroke meant for the rest of the application.
+    /// Clicking the desktop takes it; clicking anywhere else gives it back.
+    focused: bool,
     /// The pane size the server was last asked to match.
     ///
     /// Kept so a window drag does not ask once per frame: every request makes the server re-run
@@ -103,6 +111,7 @@ impl SurfaceTab {
             question: None,
             settled_key: None,
             notices: Vec::new(),
+            focused: false,
             asked_for: None,
         }
     }
@@ -360,10 +369,15 @@ impl SurfaceTab {
             }
         }
 
-        // Only while the pane has the keyboard, or every window in the application would type into
-        // the remote desktop.
-        if response.has_focus() || response.clicked() {
-            response.request_focus();
+        // A click on the desktop takes the keyboard; a click anywhere else gives it back. Checked in
+        // that order, because a click on the desktop is also "a click somewhere".
+        if response.clicked() {
+            self.focused = true;
+        } else if ui.input(|i| i.pointer.any_click()) {
+            self.focused = false;
+        }
+
+        if self.focused {
             let events = ui.input(|i| i.events.clone());
             for event in events {
                 match event {
