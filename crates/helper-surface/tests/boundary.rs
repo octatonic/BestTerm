@@ -140,9 +140,15 @@ fn a_missing_helper_is_an_error_and_not_a_panic() {
         std::sync::Arc::new(|| {}),
     )
     .expect_err("there is no helper there");
-    assert!(
-        error.to_string().to_lowercase().contains("not found")
-            || error.to_string().to_lowercase().contains("cannot find"),
-        "{error}"
-    );
+
+    // The kind, not the wording. This first asserted on the message, which reads "cannot find the
+    // file specified" on Windows and "No such file or directory" on Linux -- so it passed where it
+    // was written and failed on the other platform. What is actually promised is that a missing
+    // helper arrives as a not-found I/O error rather than a panic.
+    match error {
+        bestterm_surface::SurfaceError::Io(io) => {
+            assert_eq!(io.kind(), std::io::ErrorKind::NotFound, "{io}");
+        }
+        other => panic!("a missing file should be an i/o error, not {other:?}"),
+    }
 }
