@@ -82,6 +82,15 @@ pub(crate) struct TerminalTab {
     /// to know -- so that closing the last window on a connection can take the connection's tunnels
     /// with it. `None` for a local shell, which has no connection to belong to.
     pub(crate) connection: Option<crate::tunnels::ConnectionId>,
+    /// What it would take to open this session again, or why it cannot be.
+    ///
+    /// Held by the tab because the tab is what somebody points at when they say "get that back", and
+    /// because neither half can be recovered later: the credential was consumed by the handshake that
+    /// used it, and the server's key is only knowable while the connection that saw it exists.
+    ///
+    /// `Err` for a local shell, which has no session to reopen, and for a login whose credential was
+    /// a one-time code.
+    pub(crate) reopen: Result<Reopen, bestterm_proto_ssh::NotReconnectable>,
     /// Whatever the transport needs kept alive underneath it.
     ///
     /// For an SSH tab this is the connection the shell channel hangs off; dropping it would close the
@@ -96,6 +105,14 @@ pub(crate) struct TerminalTab {
 /// A closure rather than the windowing type, so this module says what it needs — "wake up" — without
 /// naming who provides it, and so a test can count the wake-ups.
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// What is needed to open a dead session again.
+pub(crate) struct Reopen {
+    /// The credential and the pin.
+    pub(crate) ready: Box<bestterm_proto_ssh::Reconnectable>,
+    /// Where it was, which is where it goes again.
+    pub(crate) target: Box<bestterm_core_model::SshConfig>,
+}
 
 /// Everything a tab needs to exist.
 ///
@@ -172,6 +189,9 @@ impl TerminalTab {
             exit: None,
             grid: (cols, rows),
             connection: None,
+            // Replaced by the caller for an SSH session. A local shell keeps this, because reopening
+            // one is `spawn`, not a reconnect.
+            reopen: Err(bestterm_proto_ssh::NotReconnectable::Interactive),
             _owner: owner,
         }
     }
@@ -304,6 +324,15 @@ impl TerminalTab {
             }
             None => format!("{} {}", self.transport.kind(), self.transport.label()),
         }
+    }
+
+    /// Whether this tab is a dead SSH session that could be opened again.
+    ///
+    /// Both halves matter. A live session has nothing to reconnect; a local shell and a session whose
+    /// credential cannot be replayed have nothing to reconnect *with*, and offering a button that
+    /// then explains why it will not work is worse than not offering it.
+    pub(crate) fn can_reconnect(&self) -> bool {
+        self.exit.is_some() && self.reopen.is_ok()
     }
 
     /// Terminate the peer.

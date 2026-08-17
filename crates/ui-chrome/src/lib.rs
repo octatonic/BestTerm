@@ -177,6 +177,12 @@ pub struct StatusInfo {
     pub grid: (usize, usize),
     /// Description of the focused session.
     pub session: String,
+    /// Whether the focused pane is a dead session that could be opened again.
+    ///
+    /// Decided by the application, not here: it is the only thing that knows whether the credential
+    /// can be offered a second time, and a button that appears and then explains why it will not work
+    /// is worse than no button.
+    pub can_reconnect: bool,
 }
 
 /// Chrome state owned by the application and lent to the widgets.
@@ -230,6 +236,8 @@ pub enum ChromeAction {
     OpenTunnels,
     /// Open the configuration dialog.
     OpenConfiguration,
+    /// Open a dead session again.
+    ReconnectTab(usize),
     /// Quit the application.
     Quit,
     /// A control that exists in the layout but has no behaviour yet.
@@ -622,7 +630,13 @@ fn tab_widget(ui: &mut Ui, theme: &ChromeTheme, tab: &TabInfo, active: bool) -> 
 }
 
 /// The status bar.
-pub fn status_bar(ui: &mut Ui, theme: &ChromeTheme, status: &StatusInfo) {
+pub fn status_bar(
+    ui: &mut Ui,
+    theme: &ChromeTheme,
+    status: &StatusInfo,
+    state: &ChromeState,
+    actions: &mut Vec<ChromeAction>,
+) {
     ui.horizontal(|ui| {
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             let x_label = match &status.x_display {
@@ -638,6 +652,20 @@ pub fn status_bar(ui: &mut Ui, theme: &ChromeTheme, status: &StatusInfo) {
             if !status.session.is_empty() {
                 ui.separator();
                 ui.label(egui::RichText::new(&status.session).color(theme.text_dim));
+            }
+
+            // Beside the reason it died, which is where somebody is already looking. A dead session
+            // whose credential cannot be replayed offers nothing here rather than a button that
+            // explains why it will not work.
+            if status.can_reconnect {
+                ui.separator();
+                if ui
+                    .button("Reconnect")
+                    .on_hover_text("Open this session again. The shell starts fresh.")
+                    .clicked()
+                {
+                    actions.push(ChromeAction::ReconnectTab(state.active_tab));
+                }
             }
         });
     });

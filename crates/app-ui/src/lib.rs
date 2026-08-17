@@ -290,6 +290,7 @@ impl BestTermApp {
                 ChromeAction::SelectTab(_) => {}
                 ChromeAction::CloseTab(index) => self.close_tab(index),
                 ChromeAction::OpenConfiguration => self.configuration.open = true,
+                ChromeAction::ReconnectTab(index) => self.reconnect_tab(index, ctx),
                 ChromeAction::OpenTunnels => {
                     self.tunnels.open = true;
                     // Pre-selected when there is only one candidate, because choosing between one
@@ -610,6 +611,8 @@ impl BestTermApp {
                     open,
                     session,
                     record,
+                    reconnect,
+                    target,
                 } => {
                     if let Some(record) = record {
                         append_known_host(&record);
@@ -643,6 +646,10 @@ impl BestTermApp {
                         owner: Some(Box::new(session)),
                     });
                     tab.connection = Some(id);
+                    tab.reopen = match reconnect {
+                        Ok(ready) => Ok(crate::tab::Reopen { ready, target }),
+                        Err(why) => Err(why),
+                    };
                     self.tabs.push(pane::Pane::Terminal(Box::new(tab)));
                     self.chrome.active_tab = self.tabs.len() - 1;
                 }
@@ -1025,6 +1032,52 @@ impl BestTermApp {
         }
     }
 
+    /// Open a fresh session in place of one that died.
+    ///
+    /// The replacement is a whole new connection: `russh` has no resumption, so the working
+    /// directory, the shell's history, whatever was running and the scrollback are all gone. The tab
+    /// is left in place and a new one opens beside it rather than the old one being quietly
+    /// refilled, because a terminal that comes back empty in the same tab looks like it lost its
+    /// contents to a bug.
+    ///
+    /// The host key is pinned to the one the dead connection saw. Not re-checked against
+    /// `known_hosts`: that asks whether the *address* is trusted, and the address is exactly what can
+    /// have moved while the connection was down. See `bestterm_proto_ssh::reconnect`.
+    fn reconnect_tab(&mut self, index: usize, ctx: &egui::Context) {
+        let Some(pane::Pane::Terminal(tab)) = self.tabs.get(index) else {
+            return;
+        };
+        let reopen = match &tab.reopen {
+            Ok(reopen) => reopen,
+            Err(why) => {
+                self.notices.push(why.to_string());
+                return;
+            }
+        };
+
+        let config = (*reopen.target).clone();
+        let auth = reopen.ready.auth.clone();
+        let verifier = reopen.ready.verifier();
+        let title = tab.title();
+
+        let waker = {
+            let ctx = ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint())
+                as std::sync::Arc<dyn Fn() + Send + Sync>
+        };
+
+        tracing::info!(%title, "reconnecting");
+        ssh::reconnect(
+            self.runtime.handle(),
+            config,
+            auth,
+            verifier,
+            bestterm_transport::GridSize::new(80, 24),
+            self.sessions.0.clone(),
+            waker,
+        );
+    }
+
     /// The Configuration dialog, and what its rows open.
     fn configuration_dialog(&mut self, ctx: &egui::Context) {
         use bestterm_ui_chrome::configuration::{ConfigAction, ConfigField, ConfigLink};
@@ -1283,6 +1336,11 @@ impl BestTermApp {
             .map(|tab| tab.grid())
             .unwrap_or((0, 0));
 
+        let can_reconnect = matches!(
+            self.tabs.get(self.chrome.active_tab),
+            Some(pane::Pane::Terminal(tab)) if tab.can_reconnect()
+        );
+
         self.chrome.status = StatusInfo {
             // No X server until phase 6; reporting "stopped" is accurate, not a placeholder.
             x_display: None,
@@ -1292,6 +1350,7 @@ impl BestTermApp {
                 .get(self.chrome.active_tab)
                 .map(|tab| tab.status_line())
                 .unwrap_or_default(),
+            can_reconnect,
         };
     }
 
@@ -1475,7 +1534,9 @@ impl eframe::App for BestTermApp {
         Panel::bottom("bestterm_status_bar")
             .exact_size(theme.status_bar_height)
             .frame(chrome_frame(theme.chrome_bg))
-            .show(ui, |ui| status_bar(ui, &theme, &self.chrome.status));
+            .show(ui, |ui| {
+                status_bar(ui, &theme, &chrome.status, &chrome, &mut actions)
+            });
 
         // The dialog covers everything below the quick-connect row -- the sidebar included, which is
         // where the reference puts it. Drawn here rather than inside the central panel because at this

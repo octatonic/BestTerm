@@ -34,7 +34,7 @@ Phase 2, honestly:
 | Vault | reachable; no OS keystore backend yet, so the master password is typed each session |
 | Local, remote and dynamic forwards | done, with a graphical manager |
 | Keepalive and death detection | done: 30s/3, and the reason a session ended reaches the tab |
-| Reconnect | **absent**, and see below — it is not a retry loop |
+| Reconnect | user-initiated, with the host key pinned. Automatic is deliberately not built — see below |
 | External-OpenSSH transport adapter | absent |
 | SSH session dialog | the dialog exists with all 15 protocol tabs; the per-protocol field sets are measured for Basic only |
 
@@ -45,15 +45,34 @@ separately tested and jointly unproven, and the likely failure is in what they a
 other rather than in any one of them. VNC has not started, though `helper-surface` is written so that
 its helper is a parameter rather than a special case.
 
-**Why reconnect is not simply the next item.** A reconnect re-authenticates to a host named by a
+**Reconnect, and why only half of it exists.** A reconnect re-authenticates to a host named by a
 *string*, and that name is resolved afresh every time. Between the first connection and the reconnect,
-DNS, `/etc/hosts`, DHCP or a VPN can point it at a different machine — and an automatic reconnect
-would then offer the password or private key to whatever answered, unattended, with nobody reading a
-fingerprint. The current host key check would not catch it: it re-runs `known_hosts` *policy*, and the
-snapshot it holds does not contain a key accepted by prompt during this session. So reconnect needs
-pinning — compare against the key observed on the connection being replaced, and treat any difference
-as fatal rather than as a question — before it needs a retry timer. It is listed as absent rather than
-half-done for that reason.
+DNS, `/etc/hosts`, DHCP or a VPN can point it at a different machine — and a reconnect that then
+offered the password or private key to whatever answered, with nobody reading a fingerprint, would
+hand the credential to the wrong host while looking exactly like a network hiccup recovering.
+
+Re-running the `known_hosts` policy does not catch that, and is the wrong question besides: it asks
+whether the *address* is trusted, and the address is what moved. It would also re-raise the prompt,
+because a key accepted by prompt during this session is not in the snapshot the connection was
+verifying against — and training somebody to click through a host key dialog on every network blip is
+the precise failure host key checking exists to prevent.
+
+So [`crates/proto-ssh/src/reconnect.rs`](../crates/proto-ssh/src/reconnect.rs) pins: it compares
+against the key the dying connection actually saw, and a mismatch is fatal rather than a question. A
+session that cannot be reopened — a one-time code, which cannot be replayed — says so when it opens
+rather than failing later for a reason nobody would trace back.
+
+What exists is the user-initiated half: a dead session offers `Reconnect`, and clicking it opens a
+fresh one beside the old tab. The old tab stays, because `russh` has no resumption — the working
+directory, the history, whatever was running and the scrollback are gone — and a terminal that came
+back empty in the same tab would look like it lost its contents to a bug.
+
+Automatic reconnect is not built, and `reconnect::should_retry` is the decision it will spend: a
+server-sent disconnect is an idle policy or an administrator or a session limit, and a client that
+reconnects after being asked to leave is a client arguing with an operator. What is still missing for
+the automatic path is not the safety — that is the pinning, which is done — but backoff, an attempt
+limit, and a way for it not to surprise somebody. `KeepaliveTimeout` also fires when a laptop wakes
+from sleep while the server-side session is still alive, so an eager retry there orphans a session.
 
 The lesson worth keeping from the middle of the project: a protocol crate passing its tests is not a
 feature. Wiring is the phase.

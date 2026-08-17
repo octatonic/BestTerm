@@ -27,7 +27,7 @@ use std::time::Duration;
 use bestterm_core_model::SshConfig;
 use bestterm_proto_ssh::host_key::{HostKeyDecision, HostKeyVerifier};
 use bestterm_proto_ssh::known_hosts::{HostKey, KnownHosts, Verdict};
-use bestterm_proto_ssh::{Auth, SshConnection, Target};
+use bestterm_proto_ssh::{Auth, NotReconnectable, Reconnectable, SshConnection, Target};
 use bestterm_transport::{GridSize, OpenTransport};
 
 /// How long a host key prompt waits for an answer before refusing.
@@ -118,6 +118,15 @@ pub(crate) enum SessionEvent {
         session: Arc<SshConnection>,
         /// The key to append to `known_hosts`, when the person accepted a new one.
         record: Option<HostKeyRecord>,
+        /// What is needed to open this session again, or why it cannot be.
+        ///
+        /// Assembled here, at the only moment both halves exist: the credential is about to be
+        /// dropped by the handshake that consumed it, and the server's key is only knowable while the
+        /// connection that saw it is alive. A session that cannot come back says so now rather than
+        /// failing later for a reason nobody would trace to the cause.
+        reconnect: Result<Box<Reconnectable>, NotReconnectable>,
+        /// What to reconnect to, which is the same thing that was connected to.
+        target: Box<SshConfig>,
     },
     /// It did not work.
     Failed {
@@ -201,6 +210,72 @@ impl HostKeyVerifier for PromptingVerifier {
     }
 }
 
+/// Open a fresh session in place of one that died, with the server's key pinned.
+///
+/// The same work as [`connect`] with one difference that is the whole point: the verifier is a pin
+/// rather than a prompt. A reconnect that re-ran the `known_hosts` policy would ask about a key it had
+/// already accepted -- the snapshot it holds predates the acceptance -- and training somebody to
+/// click through a host key dialog on every network blip is the failure host key checking exists to
+/// prevent. A key that does not match is fatal here, never a question.
+pub(crate) fn reconnect(
+    runtime: &tokio::runtime::Handle,
+    config: SshConfig,
+    auth: Auth,
+    verifier: Arc<dyn HostKeyVerifier>,
+    size: GridSize,
+    events: crossbeam_channel::Sender<SessionEvent>,
+    waker: Arc<dyn Fn() + Send + Sync>,
+) {
+    let title = match &config.user {
+        Some(user) => format!("{user}@{}", config.host),
+        None => config.host.clone(),
+    };
+
+    runtime.spawn(async move {
+        // Empty on purpose. The pin is the whole check, and handing the checker a store as well would
+        // invite somebody to read a `Verdict` from it and act on the wrong question.
+        let known_hosts = Arc::new(KnownHosts::parse(""));
+        let target = Target {
+            host: config.host.clone(),
+            port: config.port,
+            user: config.user.clone().unwrap_or_else(whoami),
+        };
+
+        let keep = auth.clone();
+        let event = match SshConnection::connect(target, auth, known_hosts, verifier).await {
+            Ok(connection) => {
+                let outcome = connection.host_key_outcome();
+                let connection = Arc::new(connection);
+                match connection.open_shell(size, "xterm-256color").await {
+                    Ok(open) => SessionEvent::Opened {
+                        title,
+                        open: Box::new(open),
+                        session: Arc::clone(&connection),
+                        // Nothing to write down: a reconnect accepted the key it already had.
+                        record: None,
+                        reconnect: match outcome {
+                            Some(outcome) => Reconnectable::of(keep, outcome.key).map(Box::new),
+                            None => Err(NotReconnectable::Interactive),
+                        },
+                        target: Box::new(config.clone()),
+                    },
+                    Err(error) => SessionEvent::Failed {
+                        title,
+                        reason: format!("reconnected, but could not open a shell: {error}"),
+                    },
+                }
+            }
+            Err(error) => SessionEvent::Failed {
+                title,
+                reason: error.to_string(),
+            },
+        };
+
+        let _ = events.send(event);
+        waker();
+    });
+}
+
 /// Connect and open a shell, reporting the outcome on `events`.
 ///
 /// Spawned on the runtime rather than awaited: the frame loop cannot block, and a connection can take
@@ -232,16 +307,32 @@ pub(crate) fn connect(
             user: config.user.clone().unwrap_or_else(whoami),
         };
 
+        // Kept before the handshake takes it. `SshConnection::connect` consumes the credential, and
+        // a reconnect has to offer it again.
+        let keep = auth.clone();
+
         let event = match SshConnection::connect(target, auth, known_hosts, verifier).await {
             Ok(connection) => {
-                let record = connection
-                    .host_key_outcome()
+                let outcome = connection.host_key_outcome();
+                let record = outcome
+                    .clone()
                     .filter(|outcome| outcome.should_store())
                     .map(|outcome| HostKeyRecord {
                         host: config.host.clone(),
                         port: config.port,
                         key: outcome.key,
                     });
+
+                // The key this connection actually saw, which is what a reconnect pins against --
+                // not what `known_hosts` says about the address, which is a different question and
+                // the wrong one. See `bestterm_proto_ssh::reconnect`.
+                let reconnect = match outcome {
+                    Some(outcome) => Reconnectable::of(keep, outcome.key).map(Box::new),
+                    // No outcome means the checker settled it without asking, which it does when the
+                    // key was already trusted -- and then the key is not handed back. Nothing to pin,
+                    // so nothing to reconnect from.
+                    None => Err(NotReconnectable::Interactive),
+                };
 
                 // Wrapped before the shell is opened, so the only owner from here on is the one that
                 // travels with the transport.
@@ -252,6 +343,8 @@ pub(crate) fn connect(
                         open: Box::new(open),
                         session: Arc::clone(&connection),
                         record,
+                        reconnect,
+                        target: Box::new(config.clone()),
                     },
                     Err(error) => SessionEvent::Failed {
                         title,
