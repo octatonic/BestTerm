@@ -77,6 +77,89 @@ from sleep while the server-side session is still alive, so an eager retry there
 The lesson worth keeping from the middle of the project: a protocol crate passing its tests is not a
 feature. Wiring is the phase.
 
+## What remains, measured against the plan
+
+Taken from the repository rather than from the phase list below, because the two drift. Everything
+here was checked in the source at the time of writing.
+
+### Protocols
+
+The session dialog has fifteen protocol tabs, because that is what the reference has. Two of them
+open a session.
+
+| Protocol | State |
+|---|---|
+| SSH | done: every auth method, jump chains, `ssh_config`, `known_hosts`, keepalive, forwards, reconnect |
+| Local shell | done, including WSL distribution discovery |
+| RDP | built end to end; verified against a live server up to authentication only |
+| Telnet · Serial · Rlogin | absent. All three are byte streams, so they plug into `Transport` and the terminal pane already renders them |
+| VNC | absent. Frame-based, so it needs a second helper process — `helper-surface` already takes the helper's name as a parameter for exactly this |
+| SFTP | absent, and it is the release condition for 1.0. Needs a pane kind that is neither a terminal nor a surface |
+| FTP | absent; would share whatever browser SFTP gets |
+| SPICE · S3 · Browser | absent, and none is scheduled. The Browser session type collides with "no webview" and is an open question |
+
+### Phase 1, which was skipped past
+
+The interface was built before the renderer it assumed.
+
+* `term-render` still paints through egui's text layout. The GPU glyph atlas (`swash` → `etagere` →
+  `wgpu`, with damage tracking) does not exist, and neither do the things that depend on it: ligatures,
+  colour emoji, and bold or italic at all — egui's bundled monospace face has no variants.
+* No scrollback search.
+* **No splits.** The Split menu and ribbon button exist and do nothing.
+* No layout restoration, no multi-window viewports, no terminal themes.
+* Application configuration does not persist. The session tree does; nothing else.
+
+### Chrome measured only at the top
+
+* Eight menus have the right titles and placeholder items.
+* The session dialog has all fifteen tabs; only `Basic` is measured. Advanced, Terminal, Network and
+  Bookmark are unmeasured for every protocol.
+* The Configuration dialog has its seven tabs; only `General` is measured.
+* The Tools and Macros sidebar panels are catalogues with no behaviour behind them.
+
+### Whole phases untouched
+
+X server (phase 6, the most expensive), multi-exec, macros, session logging and recording, tmux
+control mode, zmodem/trzsz, the command palette, WASM plugins.
+
+### Packaging: nothing exists
+
+CI uploads bare binaries. There is no MSI or NSIS, no deb, rpm, AppImage or Flatpak, no code signing,
+no `.desktop` entry and no application icon. Until this exists there is a repository rather than a
+product — and it forces a decision that is currently unmade: `helper_path` looks for `bestterm-rdp`
+beside the running executable, which a `.deb` splitting `/usr/bin` from `/usr/lib` has to answer.
+
+### Linux, which is worse than the build status suggests
+
+CI builds and runs the whole test suite on `x86_64-unknown-linux-gnu`, with the GUI's dependencies
+installed, so the code links. **The window has never been opened on Linux.** Tests do not start a GUI,
+and every bug found by running this application so far — a terminal that stayed blank, a tab labelled
+`sC:\Windows\...` — was found by running it.
+
+Specifically outstanding:
+
+* Wayland versus X11: eframe supports both, but scaling, clipboard and IME differ between them and
+  none of it has been looked at.
+* The vault has no OS keystore backend on either platform — `keyring` is not a dependency at all — so
+  the master password is typed once per run instead of coming from DPAPI or the Secret Service.
+* No guaranteed monospace font: the bundled egui face is what gets used.
+* Ubuntu, Debian and Arch differ in glibc and in library versions. A binary built on `ubuntu-latest`
+  is not automatically a binary that starts on Debian stable, and Arch is rolling.
+
+### Suggested order
+
+1. **Open the window on Linux.** One evening, and it will say more than a week of reasoning. Expect
+   three or four things at the level of "wrong size" and "no font".
+2. **Packaging** — deb, AppImage, MSI. It also forces the helper-location decision.
+3. **OS keystore for the vault** — small, and removes a daily irritation on both systems.
+4. **SFTP** — the most conspicuous missing feature, and cheaper than RDP or VNC.
+5. **The terminal renderer and splits** — the part of phase 1 that was skipped.
+6. **VNC** — closes phase 3 and the 0.9 beta.
+
+Items 1–4 give something usable every day on both systems. 5–6 give the public beta. Full parity
+remains what the note at the top of this file says it is.
+
 ## Phase 0 — skeleton
 
 Workspace and crate boundaries · CI on Windows and Linux from the first commit · GPL-3.0 licensing ·
