@@ -307,6 +307,7 @@ dependencies = [
  "bestterm-importers",
  "bestterm-ipc-frame",
  "bestterm-proto-ssh",
+ "bestterm-proto-telnet",
  "bestterm-surface",
  "bestterm-term-render",
  "bestterm-transport",
@@ -421,6 +422,17 @@ dependencies = [
  "russh",
  "sha1",
  "sha2",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bestterm-proto-telnet"
+version = "0.1.0"
+dependencies = [
+ "bestterm-transport",
+ "crossbeam-channel",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

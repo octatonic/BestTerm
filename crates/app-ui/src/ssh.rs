@@ -115,7 +115,10 @@ pub(crate) enum SessionEvent {
         /// It is an `Arc` because more than one thing will eventually hang off one connection: another
         /// terminal tab, an SFTP panel, a set of port forwards. `docs/ARCHITECTURE.md` calls this
         /// "session is not tab", and this is the field that makes it true.
-        session: Arc<SshConnection>,
+        ///
+        /// `None` for a protocol with no session object under its channel. Telnet is the whole of its
+        /// own connection: there is nothing beside the transport to keep alive.
+        session: Option<Arc<SshConnection>>,
         /// The key to append to `known_hosts`, when the person accepted a new one.
         record: Option<HostKeyRecord>,
         /// What is needed to open this session again, or why it cannot be.
@@ -126,7 +129,9 @@ pub(crate) enum SessionEvent {
         /// failing later for a reason nobody would trace to the cause.
         reconnect: Result<Box<Reconnectable>, NotReconnectable>,
         /// What to reconnect to, which is the same thing that was connected to.
-        target: Box<SshConfig>,
+        ///
+        /// `None` where there is nothing to reconnect, which travels with `reconnect` being `Err`.
+        target: Option<Box<SshConfig>>,
     },
     /// It did not work.
     Failed {
@@ -250,14 +255,14 @@ pub(crate) fn reconnect(
                     Ok(open) => SessionEvent::Opened {
                         title,
                         open: Box::new(open),
-                        session: Arc::clone(&connection),
+                        session: Some(Arc::clone(&connection)),
                         // Nothing to write down: a reconnect accepted the key it already had.
                         record: None,
                         reconnect: match outcome {
                             Some(outcome) => Reconnectable::of(keep, outcome.key).map(Box::new),
                             None => Err(NotReconnectable::Interactive),
                         },
-                        target: Box::new(config.clone()),
+                        target: Some(Box::new(config.clone())),
                     },
                     Err(error) => SessionEvent::Failed {
                         title,
@@ -341,10 +346,10 @@ pub(crate) fn connect(
                     Ok(open) => SessionEvent::Opened {
                         title,
                         open: Box::new(open),
-                        session: Arc::clone(&connection),
+                        session: Some(Arc::clone(&connection)),
                         record,
                         reconnect,
-                        target: Box::new(config.clone()),
+                        target: Some(Box::new(config.clone())),
                     },
                     Err(error) => SessionEvent::Failed {
                         title,

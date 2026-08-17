@@ -407,6 +407,55 @@ impl BestTermApp {
         );
     }
 
+    /// Open a telnet session.
+    ///
+    /// No credential and no vault: telnet has no authentication of its own, and the login prompt is
+    /// just more of the same byte stream. The warning about that is raised by `proto-telnet` at the
+    /// moment it becomes true and repeated here, because somebody about to type a password into a
+    /// switch should be told before they do rather than after.
+    fn connect_telnet(&mut self, config: bestterm_core_model::TelnetConfig, ctx: &egui::Context) {
+        let label = format!("{}:{}", config.host, config.port);
+        self.notices.push(format!(
+            "{label}: telnet is not encrypted — anything typed into it travels in clear text"
+        ));
+
+        let events = self.sessions.0.clone();
+        let waker = {
+            let ctx = ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint())
+                as std::sync::Arc<dyn Fn() + Send + Sync>
+        };
+        let size = bestterm_transport::GridSize::new(80, 24);
+
+        self.runtime.spawn(async move {
+            let event = match bestterm_proto_telnet::TelnetTransport::open(
+                &config.host,
+                config.port,
+                "xterm-256color",
+                size,
+            )
+            .await
+            {
+                Ok(open) => ssh::SessionEvent::Opened {
+                    title: label,
+                    open: Box::new(open),
+                    // Telnet has no session object under the channel: the transport is the whole of
+                    // it, so there is nothing to keep alive beside it and nothing to reconnect with.
+                    session: None,
+                    record: None,
+                    reconnect: Err(bestterm_proto_ssh::NotReconnectable::Interactive),
+                    target: None,
+                },
+                Err(error) => ssh::SessionEvent::Failed {
+                    title: label,
+                    reason: error.to_string(),
+                },
+            };
+            let _ = events.send(event);
+            waker();
+        });
+    }
+
     /// Open a remote desktop by launching the helper process.
     ///
     /// Unlike SSH, none of this happens on the runtime: the helper is a process, and everything slow
@@ -624,13 +673,17 @@ impl BestTermApp {
                     let (cols, rows) = (80, 24);
 
                     // Recorded before the tab takes it, so the tunnel window can offer this session
-                    // without reaching into a tab for it.
-                    let id = tunnels::ConnectionId(self.next_connection);
-                    self.next_connection += 1;
-                    self.connections.push(tunnels::LiveConnection {
-                        id,
-                        label: title.clone(),
-                        connection: std::sync::Arc::clone(&session),
+                    // without reaching into a tab for it. Only for the protocols that have a session
+                    // to offer: a telnet connection carries no channels to forward over.
+                    let id = session.as_ref().map(|connection| {
+                        let id = tunnels::ConnectionId(self.next_connection);
+                        self.next_connection += 1;
+                        self.connections.push(tunnels::LiveConnection {
+                            id,
+                            label: title.clone(),
+                            connection: std::sync::Arc::clone(connection),
+                        });
+                        id
                     });
 
                     let mut tab = TerminalTab::adopt(crate::tab::NewTab {
@@ -642,13 +695,19 @@ impl BestTermApp {
                         palette: self.palette.clone(),
                         waker,
                         // Without this the connection would be dropped here and the session would die
-                        // the moment it started working.
-                        owner: Some(Box::new(session)),
+                        // the moment it started working. A protocol with no session object under its
+                        // channel -- telnet -- has nothing to hold.
+                        owner: session.map(|connection| {
+                            Box::new(connection) as Box<dyn std::any::Any + Send + Sync>
+                        }),
                     });
-                    tab.connection = Some(id);
-                    tab.reopen = match reconnect {
-                        Ok(ready) => Ok(crate::tab::Reopen { ready, target }),
-                        Err(why) => Err(why),
+                    tab.connection = id;
+                    tab.reopen = match (reconnect, target) {
+                        (Ok(ready), Some(target)) => Ok(crate::tab::Reopen { ready, target }),
+                        // A credential that could be replayed with nowhere to replay it to is not a
+                        // reconnectable session; the two travel together or not at all.
+                        (Ok(_), None) => Err(bestterm_proto_ssh::NotReconnectable::Interactive),
+                        (Err(why), _) => Err(why),
                     };
                     self.tabs.push(pane::Pane::Terminal(Box::new(tab)));
                     self.chrome.active_tab = self.tabs.len() - 1;
@@ -1300,6 +1359,9 @@ impl BestTermApp {
             DialogOutcome::Accepted(config) => match *config {
                 bestterm_core_model::ProtocolConfig::Ssh(ssh) => self.connect_ssh(ssh, ctx),
                 bestterm_core_model::ProtocolConfig::Rdp(rdp) => self.connect_rdp(rdp, ctx),
+                bestterm_core_model::ProtocolConfig::Telnet(telnet) => {
+                    self.connect_telnet(telnet, ctx)
+                }
                 other => {
                     self.notices.push(format!(
                         "{} sessions cannot be opened yet",
