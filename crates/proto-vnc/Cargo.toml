@@ -1,0 +1,21 @@
+[package]
+name = "bestterm-proto-vnc"
+description = "VNC/RFB for BestTerm: handshake, authentication and the encodings a desktop actually uses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bestterm-core-vault.workspace = true
+bestterm-surface.workspace = true
+des.workspace = true
+flate2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

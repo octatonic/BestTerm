@@ -452,6 +452,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bestterm-proto-vnc"
+version = "0.1.0"
+dependencies = [
+ "bestterm-core-vault",
+ "bestterm-surface",
+ "des",
+ "flate2",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "bestterm-surface"
 version = "0.1.0"
 dependencies = [
