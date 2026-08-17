@@ -83,6 +83,22 @@ pub enum RdpError {
     #[error("rdp: {0}")]
     Protocol(String),
 
+    /// The server would not accept the credential.
+    ///
+    /// Told apart from [`RdpError::Protocol`] because it is the one failure whose fix is somebody
+    /// retyping something, and from [`RdpError::ServerKeyRejected`] because that one means the
+    /// *server* was refused. Measured against a real host: a wrong password arrived as
+    /// `rdp: [CredSSP @ C:\Users\...\connector.rs:107] CredSSP`, which names neither the problem nor
+    /// anything to do about it, and leaks the path the binary was built from.
+    #[error(
+        "the server rejected the user name or password{}",
+        detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
+    )]
+    CredentialRejected {
+        /// What the security layer said, when it said anything worth repeating.
+        detail: Option<String>,
+    },
+
     /// The server asked for a Kerberos exchange this build cannot perform.
     #[error("this build cannot authenticate with Kerberos; use a password")]
     KerberosUnsupported,
@@ -264,13 +280,102 @@ pub async fn connect<V: Verifier>(
     })
 }
 
-/// Flatten a connector error into something a person can read.
+/// Turn a connector error into something a person can act on.
 ///
-/// The structured error is lost on purpose: its variants describe stages of the RDP state machine,
-/// which means nothing to whoever is trying to connect, and its `Display` already says the useful
-/// part.
+/// Not `error.to_string()`, which was the first version of this. `ironrdp-error`'s `Display` writes
+/// `[{context} @ {file}:{line}] {kind}`, so the message carried the absolute path of the machine the
+/// binary was built on and ended with the word `CredSSP` -- the name of a protocol rather than a
+/// description of anything. Only the kind is read here, and the one kind with a specific answer gets a
+/// specific error.
 fn protocol(error: ConnectorError) -> RdpError {
-    RdpError::Protocol(error.to_string())
+    use ironrdp_connector::ConnectorErrorKind;
+    use sspi::ErrorKind;
+
+    match error.kind() {
+        // The NT status first, because it is where the actual answer is. Measured against a real
+        // server: a non-existent account produced `error_type: InternalError` with the description
+        // "CredSSP server returned an error status" and `nstatus: 0xc000006d` -- so reading only the
+        // error type reports a protocol failure for what is plainly a wrong password.
+        ConnectorErrorKind::Credssp(inner) if inner.nstatus.is_some() => {
+            let status = inner.nstatus.expect("checked in the guard");
+            match logon_problem(status) {
+                Some(detail) => RdpError::CredentialRejected {
+                    detail: Some(detail.to_string()),
+                },
+                None => RdpError::Protocol(format!(
+                    "the secure login exchange failed (status {:#010x})",
+                    status.0
+                )),
+            }
+        }
+        // Every way the security layer says "that is not a valid login" without an NT status to go
+        // with it. `MessageAltered` is in the list because sspi's own documentation says it is used
+        // for invalid credentials.
+        ConnectorErrorKind::Credssp(inner)
+            if matches!(
+                inner.error_type,
+                ErrorKind::LogonDenied
+                    | ErrorKind::UnknownCredentials
+                    | ErrorKind::NoCredentials
+                    | ErrorKind::MessageAltered
+                    | ErrorKind::WrongCredentialHandle
+            ) =>
+        {
+            RdpError::CredentialRejected {
+                detail: describe(&inner.description),
+            }
+        }
+        // Anything else from the security layer keeps its own words, which are more specific than
+        // "CredSSP" and name no source file.
+        ConnectorErrorKind::Credssp(inner) => {
+            RdpError::Protocol(match describe(&inner.description) {
+                Some(detail) => format!("the secure login exchange failed: {detail}"),
+                None => format!("the secure login exchange failed ({:?})", inner.error_type),
+            })
+        }
+        ConnectorErrorKind::AccessDenied => RdpError::CredentialRejected {
+            detail: Some("the server refused this account".to_string()),
+        },
+        // The remaining kinds name a stage of the state machine. Their own `Display` is the useful
+        // part and carries no path.
+        other => RdpError::Protocol(other.to_string()),
+    }
+}
+
+/// What an NT status says about a login, in words, or `None` if it is not about one.
+///
+/// Worth distinguishing rather than collapsing to "wrong password": a locked-out account, an expired
+/// password and an account that exists but is not allowed to sign in remotely are three different
+/// afternoons, and Windows already told us which. The generic `LOGON_FAILURE` deliberately does not
+/// say whether the user or the password was wrong, because the server deliberately does not say.
+fn logon_problem(status: sspi::credssp::NStatusCode) -> Option<&'static str> {
+    use sspi::credssp::NStatusCode as S;
+
+    Some(match status {
+        S::LOGON_FAILURE => return Some("the user name or password is not correct"),
+        S::WRONG_PASSWORD => "the password is not correct",
+        S::NO_SUCH_USER => "there is no such account on this server",
+        S::ACCOUNT_DISABLED => "the account is disabled",
+        S::ACCOUNT_LOCKED_OUT => "the account is locked out",
+        S::PASSWORD_EXPIRED => "the password has expired",
+        S::PASSWORD_MUST_CHANGE => "the password has to be changed before signing in",
+        S::PASSWORD_RESTRICTION => "the password does not meet this server's requirements",
+        S::INVALID_LOGON_HOURS => "the account is not allowed to sign in at this time of day",
+        S::INVALID_WORKSTATION => "the account is not allowed to sign in from this machine",
+        S::LOGON_TYPE_NOT_GRANTED => "the account is not allowed to sign in over remote desktop",
+        S::ACCOUNT_RESTRICTION => "the account is restricted from signing in",
+        S::NO_LOGON_SERVERS => "the server could not reach a domain controller",
+        _ => return None,
+    })
+}
+
+/// A description worth repeating, or nothing.
+///
+/// Security layers routinely produce an empty string or their own protocol's name here, and passing
+/// either through turns a clear message into a confusing one.
+fn describe(description: &str) -> Option<String> {
+    let trimmed = description.trim();
+    (!trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("credssp")).then(|| trimmed.to_string())
 }
 
 #[cfg(test)]
@@ -311,6 +416,107 @@ mod tests {
         assert!(unknown.contains("not been seen"), "{unknown}");
         assert!(revoked.contains("revoked"), "{revoked}");
         assert_ne!(unknown, revoked);
+    }
+
+    #[test]
+    fn a_rejected_password_says_so_and_names_no_source_file() {
+        // Measured against a real server: a wrong password arrived as
+        // `rdp: [CredSSP @ C:\Users\...\connector.rs:107] CredSSP`. That names neither the problem
+        // nor a remedy, and it leaks the build machine's paths into the interface.
+        let message = RdpError::CredentialRejected { detail: None }.to_string();
+        assert!(message.contains("password"), "{message}");
+        assert!(!message.contains(".rs:"), "{message}");
+        assert!(!message.contains("CredSSP"), "{message}");
+
+        let with_detail = RdpError::CredentialRejected {
+            detail: Some("the account is locked out".to_string()),
+        }
+        .to_string();
+        assert!(with_detail.contains("locked out"), "{with_detail}");
+    }
+
+    #[test]
+    fn the_nt_status_is_what_says_which_login_problem_it_was() {
+        use sspi::credssp::NStatusCode as S;
+
+        // 0xc000006d is what a real server returned for an account that does not exist. It arrived
+        // alongside `error_type: InternalError` and the description "CredSSP server returned an error
+        // status", so reading the error type alone called a wrong password a protocol failure.
+        assert_eq!(
+            logon_problem(S::LOGON_FAILURE),
+            Some("the user name or password is not correct")
+        );
+
+        // The distinctions worth keeping: these are three different afternoons.
+        assert_eq!(
+            logon_problem(S::ACCOUNT_LOCKED_OUT),
+            Some("the account is locked out")
+        );
+        assert_eq!(
+            logon_problem(S::PASSWORD_EXPIRED),
+            Some("the password has expired")
+        );
+        assert_eq!(
+            logon_problem(S::LOGON_TYPE_NOT_GRANTED),
+            Some("the account is not allowed to sign in over remote desktop")
+        );
+
+        // Anything that is not about a login is not turned into one.
+        assert_eq!(logon_problem(S::SUCCESS), None);
+        assert_eq!(logon_problem(sspi::credssp::NStatusCode(0xc000_0001)), None);
+    }
+
+    #[test]
+    fn no_two_login_problems_read_the_same() {
+        use sspi::credssp::NStatusCode as S;
+
+        // A message shared between two causes is a message that sends somebody to check the wrong
+        // thing.
+        let statuses = [
+            S::LOGON_FAILURE,
+            S::WRONG_PASSWORD,
+            S::NO_SUCH_USER,
+            S::ACCOUNT_DISABLED,
+            S::ACCOUNT_LOCKED_OUT,
+            S::PASSWORD_EXPIRED,
+            S::PASSWORD_MUST_CHANGE,
+            S::PASSWORD_RESTRICTION,
+            S::INVALID_LOGON_HOURS,
+            S::INVALID_WORKSTATION,
+            S::LOGON_TYPE_NOT_GRANTED,
+            S::ACCOUNT_RESTRICTION,
+            S::NO_LOGON_SERVERS,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for status in statuses {
+            let detail = logon_problem(status).expect("every one of these is a login problem");
+            assert!(seen.insert(detail), "{detail:?} is used for two statuses");
+        }
+    }
+
+    #[test]
+    fn an_empty_or_useless_description_is_not_repeated() {
+        assert_eq!(describe("  "), None);
+        // The security layer returns its own protocol's name here, which says nothing.
+        assert_eq!(describe("CredSSP"), None);
+        assert_eq!(describe("credssp"), None);
+        assert_eq!(
+            describe(" the account is disabled "),
+            Some("the account is disabled".to_string())
+        );
+    }
+
+    #[test]
+    fn a_rejected_credential_reads_differently_from_a_rejected_server() {
+        // The two failures somebody would otherwise go and check the wrong one of.
+        let credential = RdpError::CredentialRejected { detail: None }.to_string();
+        let server = RdpError::ServerKeyRejected {
+            verdict: VerdictSummary::Revoked,
+        }
+        .to_string();
+        assert_ne!(credential, server);
+        assert!(server.contains("key"), "{server}");
+        assert!(!credential.contains("key"), "{credential}");
     }
 
     #[test]
