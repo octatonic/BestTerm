@@ -1,0 +1,27 @@
+[package]
+name = "bestterm-vnc"
+description = "The VNC helper process: speaks RFB on one side and BestTerm's frame protocol on the other"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "bestterm-vnc"
+path = "src/main.rs"
+
+[dependencies]
+bestterm-ipc-frame.workspace = true
+bestterm-proto-vnc.workspace = true
+bestterm-surface.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+bestterm-core-vault.workspace = true

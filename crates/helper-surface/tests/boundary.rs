@@ -127,6 +127,55 @@ fn the_helper_starts_reads_our_request_and_reports_back() {
     surface.shutdown().expect("shutting down twice is allowed");
 }
 
+/// The VNC helper's own boundary, which is the same protocol and a different binary.
+///
+/// Worth its own test rather than trusting the shared code: `helper-surface` takes the helper's name
+/// as a parameter, so a second helper is the first real check that the parameter is honoured all the
+/// way down rather than the RDP one being reached by habit.
+#[test]
+fn the_vnc_helper_speaks_the_same_boundary() {
+    let name = format!("bestterm-vnc{}", std::env::consts::EXE_SUFFIX);
+    let helper = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.join("target/debug").join(&name))
+        .filter(|path| path.is_file());
+    let Some(helper) = helper else {
+        println!("SKIPPED: bestterm-vnc is not built. Run `cargo build --workspace`.");
+        return;
+    };
+
+    let (mut surface, events) = bestterm_helper_surface::connect(
+        &helper,
+        SurfaceKind::Vnc,
+        "vnc boundary".to_string(),
+        request(1),
+        std::sync::Arc::new(|| {}),
+    )
+    .expect("the helper starts");
+
+    assert_eq!(surface.kind(), SurfaceKind::Vnc);
+
+    let mut seen = Vec::new();
+    let reason = loop {
+        match events.recv_timeout(PATIENCE) {
+            Ok(SurfaceEvent::Closed { reason }) => break reason,
+            Ok(other) => seen.push(other),
+            Err(_) => panic!("the helper said nothing in {PATIENCE:?}; saw {seen:?}"),
+        }
+    };
+
+    let reason = reason.expect("a refused connection has a reason");
+    assert!(!reason.trim().is_empty(), "{reason:?}");
+    assert!(
+        seen.iter()
+            .all(|event| !matches!(event, SurfaceEvent::Frame(_))),
+        "nothing was connected, so nothing should have drawn: {seen:?}"
+    );
+
+    surface.shutdown().expect("shutting down is allowed");
+}
+
 #[test]
 fn a_missing_helper_is_an_error_and_not_a_panic() {
     // The path is built from `current_exe`, so it is normally right; this is about the installation

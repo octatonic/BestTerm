@@ -52,6 +52,9 @@ const SCROLLBACK: usize = 10_000;
 /// The RDP helper's file name, without a platform suffix.
 const RDP_HELPER: &str = "bestterm-rdp";
 
+/// The VNC helper's.
+const VNC_HELPER: &str = "bestterm-vnc";
+
 /// Where accepted RDP server keys are recorded.
 ///
 /// Its own file rather than a section of the configuration: it is a log that is appended to, people
@@ -543,6 +546,71 @@ impl BestTermApp {
         match bestterm_helper_surface::connect(
             &helper,
             bestterm_surface::SurfaceKind::Rdp,
+            label.clone(),
+            request,
+            waker,
+        ) {
+            Ok((surface, events)) => {
+                let tab = crate::surface_tab::SurfaceTab::adopt(Box::new(surface), events, label);
+                self.tabs.push(pane::Pane::Surface(Box::new(tab)));
+                self.chrome.active_tab = self.tabs.len() - 1;
+            }
+            Err(error) => self.notices.push(format!("{label}: {error}")),
+        }
+    }
+
+    /// Open a VNC session by launching the helper process.
+    ///
+    /// Almost the same as [`BestTermApp::connect_rdp`], and the differences are the protocol's: VNC
+    /// has no server key to confirm, and nothing about it is encrypted — which is said here rather
+    /// than left in a log, because a password typed into a VNC session is a password on the wire.
+    fn connect_vnc(&mut self, config: bestterm_core_model::VncConfig, ctx: &egui::Context) {
+        let label = format!("{}:{}", config.host, config.port);
+        self.notices.push(format!(
+            "{label}: VNC is not encrypted — the desktop and everything typed into it travel in              clear text"
+        ));
+
+        let helper = match bestterm_helper_surface::helper_path(VNC_HELPER) {
+            Ok(path) if path.is_file() => path,
+            Ok(path) => {
+                self.notices.push(format!(
+                    "the VNC helper is not installed beside this program (looked for {})",
+                    path.display()
+                ));
+                return;
+            }
+            Err(error) => {
+                self.notices.push(format!(
+                    "could not work out where the VNC helper is: {error}"
+                ));
+                return;
+            }
+        };
+
+        // The password is not read from the vault yet: the session dialog does not collect a VNC
+        // credential, and reaching into the vault for a session that may not need one would unlock it
+        // for nothing. A server that wants a password refuses, and says so.
+        let request = bestterm_ipc_frame::ConnectRequest {
+            host: config.host.clone(),
+            port: config.port,
+            username: String::new(),
+            domain: None,
+            password: bestterm_core_vault::Secret::new(String::new()),
+            desktop_size: bestterm_surface::FrameSize::new(1280, 800),
+            enable_credssp: false,
+            keyboard_layout: 0,
+            client_name: "BestTerm".to_string(),
+            known_server_key: None,
+        };
+
+        let waker = {
+            let ctx = ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint()) as bestterm_helper_surface::Waker
+        };
+
+        match bestterm_helper_surface::connect(
+            &helper,
+            bestterm_surface::SurfaceKind::Vnc,
             label.clone(),
             request,
             waker,
@@ -1391,6 +1459,7 @@ impl BestTermApp {
             DialogOutcome::Accepted(config) => match *config {
                 bestterm_core_model::ProtocolConfig::Ssh(ssh) => self.connect_ssh(ssh, ctx),
                 bestterm_core_model::ProtocolConfig::Rdp(rdp) => self.connect_rdp(rdp, ctx),
+                bestterm_core_model::ProtocolConfig::Vnc(vnc) => self.connect_vnc(vnc, ctx),
                 bestterm_core_model::ProtocolConfig::Telnet(telnet) => {
                     self.connect_telnet(telnet, ctx)
                 }

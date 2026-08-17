@@ -21,10 +21,12 @@
 
 pub mod auth;
 pub mod decode;
+pub mod keysym;
 pub mod pixels;
 pub mod session;
 
 pub use auth::Security;
 pub use decode::{DecodeError, Framebuffer};
+pub use keysym::keysym;
 pub use pixels::PixelFormat;
 pub use session::{Desktop, Update, VncError};

@@ -161,6 +161,9 @@ jobs:
             if [ -f "target/release/bestterm$suffix" ]; then
               cp "target/release/bestterm$suffix" dist/
             fi
+            if [ -f "target/release/bestterm-vnc$suffix" ]; then
+              cp "target/release/bestterm-vnc$suffix" dist/
+            fi
             if [ -f "helpers/rdp/target/release/bestterm-rdp$suffix" ]; then
               cp "helpers/rdp/target/release/bestterm-rdp$suffix" dist/
             fi
