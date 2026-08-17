@@ -13,7 +13,8 @@
 //!
 //! # The shape
 //!
-//! [`negotiate`] holds the protocol and no socket, so the option dance is tested without a network.
+//! The `negotiate` module holds the protocol and no socket, so the option dance is tested without a
+//! network. It is private: the option dance is this crate's business, and a caller wants a transport.
 //! This module is the plumbing: a socket, a reader task that turns bytes into
 //! [`TransportEvent`]s, and a writer task fed by a channel — the same shape `proto-ssh` uses, for the
 //! same reason. Nothing here blocks the interface.
