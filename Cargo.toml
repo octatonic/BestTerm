@@ -33,6 +33,7 @@ bestterm-core-vault = { path = "crates/core-vault", version = "0.1.0" }
 bestterm-importers = { path = "crates/importers", version = "0.1.0" }
 bestterm-proto-ssh = { path = "crates/proto-ssh", version = "0.1.0" }
 bestterm-proto-telnet = { path = "crates/proto-telnet", version = "0.1.0" }
+bestterm-proto-serial = { path = "crates/proto-serial", version = "0.1.0" }
 bestterm-ipc-frame = { path = "crates/ipc-frame", version = "0.1.0" }
 bestterm-helper-surface = { path = "crates/helper-surface", version = "0.1.0" }
 bestterm-core-pty = { path = "crates/core-pty", version = "0.1.0" }
@@ -100,6 +101,9 @@ base64 = "0.23"
 # reading an existing file requires it. SHA-256 is for host key fingerprints.
 hmac = "0.13"
 sha1 = "0.11"
+# Serial ports. The repository is looking for maintainers, especially on Windows, which is
+# why `proto-serial` keeps its own trait over it -- see that crate for the plan B.
+serialport = { version = "4.7", default-features = false }
 sha2 = "0.11"
 
 # ---- graphical protocols ----------------------------------------------------

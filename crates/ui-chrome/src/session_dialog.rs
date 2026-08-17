@@ -22,7 +22,9 @@
 
 use egui::{Align, Align2, CornerRadius, Layout, Rect, Sense, Stroke, Ui, vec2};
 
-use bestterm_core_model::{ProtocolConfig, RdpConfig, SshConfig, TelnetConfig, VncConfig};
+use bestterm_core_model::{
+    ProtocolConfig, RdpConfig, SerialConfig, SshConfig, TelnetConfig, VncConfig,
+};
 
 use crate::ChromeTheme;
 
@@ -387,8 +389,33 @@ impl SessionDialog {
                     ..VncConfig::default()
                 })))
             }
-            // Serial, Shell and the rest need fields this dialog does not yet collect, or a model
-            // variant that does not exist. Named individually so the message says which.
+            DialogProtocol::Serial => {
+                let device = self.fields.serial_port.trim();
+                if device.is_empty() {
+                    return DialogOutcome::Incomplete {
+                        field: "Serial port",
+                    };
+                }
+                // The speed is the one setting that is wrong when a console shows rubbish, so an
+                // unreadable one is refused rather than quietly defaulted -- a session that silently
+                // opened at 115200 when somebody typed 9600 would look like a broken cable.
+                let Ok(baud) = self.fields.baud.trim().parse::<u32>() else {
+                    return DialogOutcome::Incomplete {
+                        field: "Speed (bps)",
+                    };
+                };
+                DialogOutcome::Accepted(Box::new(ProtocolConfig::Serial(SerialConfig {
+                    device: device.to_owned(),
+                    baud,
+                    // 8N1 with no flow control, which is what console cables are wired for. The
+                    // dialog does not collect the rest yet; `docs/ui-parity.md` has not measured that
+                    // tab, and inventing fields would put settings on screen the reference does not
+                    // have.
+                    ..SerialConfig::default()
+                })))
+            }
+            // Shell and the rest need fields this dialog does not yet collect, or a model variant
+            // that does not exist. Named individually so the message says which.
             other => DialogOutcome::Unsupported(other.label()),
         }
     }

@@ -29,6 +29,7 @@ bestterm-helper-surface.workspace = true
 # The connect request the helper is handed. `helper-surface` carries it but does not build it:
 # what goes in it comes from the session model, which lives here.
 bestterm-ipc-frame.workspace = true
+bestterm-proto-serial.workspace = true
 bestterm-proto-ssh.workspace = true
 bestterm-proto-telnet.workspace = true
 bestterm-core-terminal.workspace = true

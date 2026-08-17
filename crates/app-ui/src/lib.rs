@@ -407,6 +407,38 @@ impl BestTermApp {
         );
     }
 
+    /// Open a serial port.
+    ///
+    /// Synchronous, and not on the runtime: opening a port is a system call rather than a network
+    /// round trip, and the thread that reads it is the port's own. Spawning a task to do a `open()`
+    /// would add a hop and hide where the blocking is.
+    fn open_serial(&mut self, config: &bestterm_core_model::SerialConfig, ctx: &egui::Context) {
+        let waker = {
+            let ctx = ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint()) as crate::tab::Waker
+        };
+
+        match bestterm_proto_serial::SerialTransport::open(config) {
+            Ok(open) => {
+                let title = open.transport.label();
+                let tab = TerminalTab::adopt(crate::tab::NewTab {
+                    open,
+                    title,
+                    cols: 80,
+                    rows: 24,
+                    scrollback: SCROLLBACK,
+                    palette: self.palette.clone(),
+                    waker,
+                    // A port owns itself; there is nothing underneath it to keep alive.
+                    owner: None,
+                });
+                self.tabs.push(pane::Pane::Terminal(Box::new(tab)));
+                self.chrome.active_tab = self.tabs.len() - 1;
+            }
+            Err(error) => self.notices.push(error.to_string()),
+        }
+    }
+
     /// Open a telnet session.
     ///
     /// No credential and no vault: telnet has no authentication of its own, and the login prompt is
@@ -1361,6 +1393,9 @@ impl BestTermApp {
                 bestterm_core_model::ProtocolConfig::Rdp(rdp) => self.connect_rdp(rdp, ctx),
                 bestterm_core_model::ProtocolConfig::Telnet(telnet) => {
                     self.connect_telnet(telnet, ctx)
+                }
+                bestterm_core_model::ProtocolConfig::Serial(serial) => {
+                    self.open_serial(&serial, ctx)
                 }
                 other => {
                     self.notices.push(format!(

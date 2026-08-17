@@ -1,0 +1,20 @@
+[package]
+name = "bestterm-proto-serial"
+description = "Serial ports for BestTerm, behind the Transport trait so the crate underneath can be replaced"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bestterm-core-model.workspace = true
+bestterm-transport.workspace = true
+crossbeam-channel.workspace = true
+serialport.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
