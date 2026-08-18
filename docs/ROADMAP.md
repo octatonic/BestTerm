@@ -84,19 +84,20 @@ here was checked in the source at the time of writing.
 
 ### Protocols
 
-The session dialog has fifteen protocol tabs, because that is what the reference has. Two of them
+The session dialog has fifteen protocol tabs, because that is what the reference has. Five of them
 open a session.
 
 | Protocol | State |
 |---|---|
 | SSH | done: every auth method, jump chains, `ssh_config`, `known_hosts`, keepalive, forwards, reconnect |
 | Local shell | done, including WSL distribution discovery |
-| RDP | built end to end; verified against a live server up to authentication only |
-| Telnet · Serial · Rlogin | absent. All three are byte streams, so they plug into `Transport` and the terminal pane already renders them |
-| VNC | absent. Frame-based, so it needs a second helper process — `helper-surface` already takes the helper's name as a parameter for exactly this |
+| RDP | built end to end; verified against a live server up to authentication only, with its own helper process |
+| Telnet · Serial | done. Both are byte streams, so they plug into `Transport` and the terminal pane renders them with no further work |
+| Rsh | absent. The reference calls this tab `Rsh`, not `Rlogin` — they are different protocols on different ports, and this list said the wrong one until somebody read the dialog |
+| VNC | built end to end, including its own helper process. Never run against a real server. Raw, CopyRect and ZRLE; Tight is absent, and it is an *encoding* rather than a protocol — a bandwidth optimisation on top of ZRLE, which every server supports |
 | SFTP | absent, and it is the release condition for 1.0. Needs a pane kind that is neither a terminal nor a surface |
 | FTP | absent; would share whatever browser SFTP gets |
-| SPICE · S3 · Browser | absent, and none is scheduled. The Browser session type collides with "no webview" and is an open question |
+| Xdmcp · Mosh · Aws S3 · Browser · File | absent, and none is scheduled. Two are open questions rather than work items: `Browser` collides with the "no webview" decision, and `Aws S3` is a storage API rather than a remote-access protocol |
 
 ### Phase 1, which was skipped past
 

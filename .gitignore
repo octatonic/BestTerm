@@ -42,3 +42,5 @@ bestterm.local.toml
 # Snapshot test failures
 **/snapshots/*.new.png
 **/snapshots/*.diff.png
+
+# The packaging output. Rebuilt by scripts/package-windows.sh.
