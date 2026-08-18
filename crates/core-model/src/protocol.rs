@@ -119,6 +119,19 @@ impl ProtocolConfig {
         }
     }
 
+    /// The TCP port this session connects to, where the notion applies.
+    ///
+    /// `None` for a serial line and a local shell, which have no port rather than port zero -- the
+    /// distinction matters to anything deciding whether it can try to reach the thing.
+    pub fn port(&self) -> Option<u16> {
+        match self {
+            Self::Ssh(c) => Some(c.port),
+            Self::Telnet(c) => Some(c.port),
+            Self::Rdp(c) => Some(c.port),
+            Self::Vnc(c) => Some(c.port),
+            Self::Serial(_) | Self::LocalShell(_) => None,
+        }
+    }
     /// A one-line description for the status bar.
     pub fn summary(&self) -> String {
         match self {

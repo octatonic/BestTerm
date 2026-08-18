@@ -289,6 +289,101 @@ impl Default for SessionDialog {
 }
 
 impl SessionDialog {
+    /// Show the dialog filled in from an existing session.
+    ///
+    /// The counterpart of [`SessionDialog::open_fresh`], and the reason the dialog was unusable for
+    /// anything but creating: a saved session could be opened and deleted and never *changed*.
+    ///
+    /// Only the fields this dialog collects are loaded, which is the same set it can produce.
+    /// Anything a session carries that it cannot show — jump hosts, forwards, a stored credential,
+    /// a private key — is left alone by [`SessionDialog::merge_into`] rather than lost on the way
+    /// through. A dialog that silently drops what it cannot display is worse than one that cannot
+    /// edit at all.
+    pub fn open_for(&mut self, config: &ProtocolConfig) {
+        *self = Self {
+            open: true,
+            ..Self::default()
+        };
+
+        match config {
+            ProtocolConfig::Ssh(ssh) => {
+                self.protocol = DialogProtocol::Ssh;
+                self.fields.host = ssh.host.clone();
+                self.fields.port = ssh.port.to_string();
+                self.fields.user = ssh.user.clone().unwrap_or_default();
+            }
+            ProtocolConfig::Telnet(telnet) => {
+                self.protocol = DialogProtocol::Telnet;
+                self.fields.host = telnet.host.clone();
+                self.fields.port = telnet.port.to_string();
+            }
+            ProtocolConfig::Rdp(rdp) => {
+                self.protocol = DialogProtocol::Rdp;
+                self.fields.host = rdp.host.clone();
+                self.fields.port = rdp.port.to_string();
+                self.fields.user = rdp.user.clone().unwrap_or_default();
+                self.fields.domain = rdp.domain.clone().unwrap_or_default();
+            }
+            ProtocolConfig::Vnc(vnc) => {
+                self.protocol = DialogProtocol::Vnc;
+                self.fields.host = vnc.host.clone();
+                self.fields.port = vnc.port.to_string();
+            }
+            ProtocolConfig::Serial(serial) => {
+                self.protocol = DialogProtocol::Serial;
+                self.fields.serial_port = serial.device.clone();
+                self.fields.baud = serial.baud.to_string();
+            }
+            // A protocol this dialog cannot show opens on its own tab with nothing filled in,
+            // rather than on the SSH tab with the wrong fields: an empty form says "not yet" and a
+            // populated wrong one says something false.
+            other => {
+                self.protocol = match other.protocol() {
+                    bestterm_core_model::Protocol::LocalShell => DialogProtocol::Shell,
+                    _ => DialogProtocol::Ssh,
+                };
+            }
+        }
+    }
+
+    /// Carry what this dialog collected back onto an existing session.
+    ///
+    /// Not a replacement. `ProtocolConfig` holds things the dialog has no field for, and building a
+    /// fresh one would drop them — a session's jump hosts would vanish because somebody corrected
+    /// its port. So it is merged field by field, and only where the protocol still matches; changing
+    /// a saved session's protocol is a different operation, and that one replaces.
+    pub fn merge_into(produced: ProtocolConfig, existing: &mut ProtocolConfig) {
+        match (produced, existing) {
+            (ProtocolConfig::Ssh(new), ProtocolConfig::Ssh(old)) => {
+                old.host = new.host;
+                old.port = new.port;
+                old.user = new.user;
+                // `auth` is deliberately untouched. This dialog has no field for it, so whatever it
+                // produced is a default rather than a choice — and copying that over would turn
+                // every edited session into an agent session, which is precisely the bug that left
+                // 128 imported sessions unable to connect.
+            }
+            (ProtocolConfig::Telnet(new), ProtocolConfig::Telnet(old)) => *old = new,
+            (ProtocolConfig::Rdp(new), ProtocolConfig::Rdp(old)) => {
+                old.host = new.host;
+                old.port = new.port;
+                old.user = new.user;
+                old.domain = new.domain;
+            }
+            (ProtocolConfig::Vnc(new), ProtocolConfig::Vnc(old)) => {
+                old.host = new.host;
+                old.port = new.port;
+            }
+            (ProtocolConfig::Serial(new), ProtocolConfig::Serial(old)) => {
+                old.device = new.device;
+                old.baud = new.baud;
+            }
+            // The protocol changed, which is a replacement rather than an edit: nothing of the old
+            // configuration means anything under the new one.
+            (produced, existing) => *existing = produced,
+        }
+    }
+
     /// Show the dialog, resetting it to the state a fresh one starts in.
     pub fn open_fresh(&mut self) {
         *self = Self {

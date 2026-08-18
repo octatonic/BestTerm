@@ -5,6 +5,7 @@
 
 mod keymap;
 mod pane;
+mod session_menu;
 mod ssh;
 mod surface_tab;
 mod tab;
@@ -25,6 +26,7 @@ use bestterm_ui_chrome::{
 };
 use egui::{CentralPanel, CornerRadius, EventFilter, Frame, Panel, Sense, Stroke};
 
+use crate::session_menu::SessionAction;
 use crate::ssh::{HostKeyQuestion, HostKeyRecord, HostKeyVerdict, SessionEvent};
 use crate::tab::TerminalTab;
 use crate::vault::{PendingUnlock, Prompt, VaultState};
@@ -125,6 +127,13 @@ pub struct BestTermApp {
     tunnels: tunnels::TunnelState,
     /// The Configuration dialog, whether or not it is on screen.
     configuration: bestterm_ui_chrome::configuration::Configuration,
+    /// The session the Session dialog is editing, when it is editing one rather than creating.
+    ///
+    /// `None` covers both a closed dialog and one opened to create, which are the same thing as
+    /// far as accepting it goes: the result opens a session and nothing is written back.
+    editing: Option<NodeId>,
+    /// A session being renamed in place, and the text typed so far.
+    renaming: Option<(NodeId, String)>,
 }
 
 impl Default for BestTermApp {
@@ -217,6 +226,8 @@ impl BestTermApp {
             next_connection: 1,
             tunnels: tunnels::TunnelState::default(),
             configuration: bestterm_ui_chrome::configuration::Configuration::default(),
+            editing: None,
+            renaming: None,
         }
     }
 
@@ -1372,7 +1383,7 @@ impl BestTermApp {
     }
 
     /// Draw the saved session tree, returning a session somebody asked to open.
-    fn session_tree(&mut self, ui: &mut egui::Ui) -> Option<NodeId> {
+    fn session_tree(&mut self, ui: &mut egui::Ui) -> Option<(NodeId, SessionAction)> {
         let roots: Vec<NodeId> = self.tree.roots().to_vec();
         if roots.is_empty() {
             ui.label(
@@ -1384,15 +1395,20 @@ impl BestTermApp {
             );
             return None;
         }
-        let mut requested = None;
+        let mut chosen = None;
         for id in roots {
-            self.session_node(ui, id, &mut requested);
+            self.session_node(ui, id, &mut chosen);
         }
-        requested
+        chosen
     }
 
     /// Draw one node and, for a folder, its children.
-    fn session_node(&mut self, ui: &mut egui::Ui, id: NodeId, requested: &mut Option<NodeId>) {
+    fn session_node(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: NodeId,
+        chosen: &mut Option<(NodeId, SessionAction)>,
+    ) {
         let Some(node) = self.tree.get(id) else {
             return;
         };
@@ -1403,31 +1419,257 @@ impl BestTermApp {
             // egui's own collapsing header, because it paints its triangle with the painter rather
             // than with a glyph. The first version used `▸` and `▾`, which the bundled font does not
             // have, so every folder in the tree was marked with an empty box.
-            egui::CollapsingHeader::new(name)
+            let header = egui::CollapsingHeader::new(name)
                 .id_salt(id)
                 .default_open(false)
                 .show(ui, |ui| {
                     for child in children {
-                        self.session_node(ui, child, requested);
+                        self.session_node(ui, child, chosen);
                     }
                 });
-        } else if ui.selectable_label(false, name).double_clicked() {
-            *requested = Some(id);
+            header.header_response.context_menu(|ui| {
+                if let Some(action) =
+                    crate::session_menu::show(ui, crate::session_menu::FOLDER_MENU)
+                {
+                    *chosen = Some((id, action));
+                }
+            });
+        } else {
+            let row = ui.selectable_label(false, name);
+            if row.double_clicked() {
+                *chosen = Some((id, SessionAction::Execute));
+            }
+            // The measured menu, drawn whole. See `session_menu`: an item missing from it is an
+            // item nobody notices is missing.
+            row.context_menu(|ui| {
+                if let Some(action) =
+                    crate::session_menu::show(ui, crate::session_menu::SESSION_MENU)
+                {
+                    *chosen = Some((id, action));
+                }
+            });
         }
     }
 
-    /// Open the session a tree node describes.
-    fn open_saved_session(&mut self, id: NodeId, ctx: &egui::Context) {
+    /// Act on what the session tree's context menu asked for.
+    ///
+    /// The menu is drawn whole because the list is the measurement; the items with no behaviour
+    /// report themselves by name rather than doing nothing, which is indistinguishable from a bug.
+    fn apply_session_action(&mut self, id: NodeId, action: SessionAction, ctx: &egui::Context) {
         let Some(node) = self.tree.get(id) else {
             return;
         };
-        match &node.kind {
-            NodeKind::Session { config } => {
-                let config = config.as_ref().clone();
-                self.open_protocol(config, ctx);
+        let name = node.name.clone();
+        let config = match &node.kind {
+            NodeKind::Session { config } => Some(config.as_ref().clone()),
+            NodeKind::Folder { .. } => None,
+        };
+
+        match action {
+            SessionAction::Execute => {
+                if let Some(config) = config {
+                    self.open_protocol(config, ctx);
+                }
             }
-            NodeKind::Folder { .. } => {}
+
+            // The dialog, filled in, so somebody can change the user before connecting. That is what
+            // Connect as means: the same session with one field different, and not written back.
+            SessionAction::ConnectAs => {
+                if let Some(config) = config {
+                    self.dialog.open_for(&config);
+                    self.editing = None;
+                }
+            }
+
+            SessionAction::Ping => self.ping(config.as_ref()),
+
+            SessionAction::Rename => self.renaming = Some((id, name)),
+
+            SessionAction::Edit => {
+                if let Some(config) = config {
+                    self.dialog.open_for(&config);
+                    // What makes it an edit rather than a new session: accepting merges back onto
+                    // this node instead of opening something.
+                    self.editing = Some(id);
+                }
+            }
+
+            SessionAction::Delete => match self.tree.remove(id) {
+                Ok(_) => {
+                    self.save_tree();
+                    self.notices.push(format!("deleted {name}"));
+                }
+                Err(error) => self.notices.push(error.to_string()),
+            },
+
+            SessionAction::Duplicate => self.duplicate_session(id),
+
+            SessionAction::Unimplemented(item) => {
+                self.notices
+                    .push(format!("{item} has nothing behind it yet"));
+            }
         }
+    }
+
+    /// Write what the dialog collected back onto a saved session.
+    ///
+    /// Merged rather than replaced. `ProtocolConfig` carries things this dialog has no field for --
+    /// jump hosts, forwards, a private key, a stored credential -- and building a fresh one would
+    /// drop them, so correcting a port would silently delete a session's key. See
+    /// `SessionDialog::merge_into`.
+    fn save_edited_session(&mut self, id: NodeId, produced: ProtocolConfig) {
+        let Some(node) = self.tree.get_mut(id) else {
+            self.notices
+                .push("that session is no longer in the tree".to_string());
+            return;
+        };
+        let NodeKind::Session { config } = &mut node.kind else {
+            return;
+        };
+
+        let mut updated = config.as_ref().clone();
+        SessionDialog::merge_into(produced, &mut updated);
+        **config = updated;
+        let name = node.name.clone();
+
+        self.save_tree();
+        self.notices.push(format!("saved {name}"));
+    }
+
+    /// The rename window.
+    ///
+    /// A window rather than an editable label in the tree: a text field inside a scrolling tree of
+    /// five hundred rows loses focus the moment the list moves under it, and the reference uses a
+    /// dialog for the same reason.
+    fn rename_window(&mut self, ctx: &egui::Context) {
+        let Some((id, mut text)) = self.renaming.take() else {
+            return;
+        };
+
+        let mut done = None;
+        egui::Modal::new(egui::Id::new("rename-session")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading("Rename");
+            ui.add_space(8.0);
+            let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
+            field.request_focus();
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("Rename").clicked() {
+                    done = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+            });
+            // Enter renames and Escape does not, because a rename dialog that needs the mouse is
+            // one people stop using.
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                done = Some(true);
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                done = Some(false);
+            }
+        });
+
+        match done {
+            Some(true) => {
+                let trimmed = text.trim().to_string();
+                if trimmed.is_empty() {
+                    // Refused rather than accepted: a nameless row in a tree of five hundred is a
+                    // session somebody has lost.
+                    self.notices.push("a session needs a name".to_string());
+                    self.renaming = Some((id, text));
+                    return;
+                }
+                match self.tree.rename(id, trimmed) {
+                    Ok(()) => self.save_tree(),
+                    Err(error) => self.notices.push(error.to_string()),
+                }
+            }
+            Some(false) => {}
+            // Still open, with whatever has been typed so far.
+            None => self.renaming = Some((id, text)),
+        }
+    }
+
+    /// Copy a session beside itself.
+    fn duplicate_session(&mut self, id: NodeId) {
+        let Some(node) = self.tree.get(id) else {
+            return;
+        };
+        let NodeKind::Session { config } = &node.kind else {
+            self.notices
+                .push("duplicating a folder is not something this does yet".to_string());
+            return;
+        };
+
+        // A copy, and a copy of a copy after that. Numbering them would be tidier and would also mean
+        // deciding what happens once the numbers have gaps in them; this way the name says how many
+        // times it happened.
+        let name = format!("{} (copy)", node.name);
+        let config = config.as_ref().clone();
+        let parent = node.parent;
+        let settings = node.settings.clone();
+        let icon = node.icon.clone();
+
+        match self.tree.add_session(parent, name.clone(), config) {
+            Ok(new_id) => {
+                // The copy keeps the original's appearance: a duplicate that looked different would
+                // be hard to find again in a tree of a hundred.
+                if let Some(node) = self.tree.get_mut(new_id) {
+                    node.settings = settings;
+                    node.icon = icon;
+                }
+                self.save_tree();
+                self.notices.push(format!("created {name}"));
+            }
+            Err(error) => self.notices.push(error.to_string()),
+        }
+    }
+
+    /// Report whether a host answers, without opening a session on it.
+    ///
+    /// A TCP connection to the port the session uses, and not ICMP. A ping needs a raw socket and an
+    /// administrator, and the question somebody is actually asking is whether they can reach the thing
+    /// they are about to connect to. A filtered port answers no here and would answer yes to ICMP,
+    /// which is the less useful of the two answers.
+    fn ping(&mut self, config: Option<&ProtocolConfig>) {
+        let Some(config) = config else {
+            return;
+        };
+        let Some(host) = config.host().map(str::to_owned) else {
+            self.notices
+                .push("this session has no host to reach".to_string());
+            return;
+        };
+        let port = config.port().unwrap_or(0);
+        if port == 0 {
+            self.notices.push(format!("{host} has no port to try"));
+            return;
+        }
+
+        let events = self.sessions.0.clone();
+        let target = format!("{host}:{port}");
+        self.runtime.spawn(async move {
+            let started = std::time::Instant::now();
+            let reached = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                tokio::net::TcpStream::connect((host.as_str(), port)),
+            )
+            .await;
+            let reason = match reached {
+                Ok(Ok(_)) => format!("{target} answered in {}ms", started.elapsed().as_millis()),
+                Ok(Err(error)) => format!("{target} refused the connection: {error}"),
+                Err(_) => format!("{target} did not answer within 5s"),
+            };
+            // Reported through the session channel, which the interface already drains every frame.
+            let _ = events.send(SessionEvent::Failed {
+                title: String::new(),
+                reason,
+            });
+        });
     }
 
     /// Put the interface into the state [`UI_STATE_VARIABLE`] asked for, if it asked for one.
@@ -1469,10 +1711,18 @@ impl BestTermApp {
     /// indistinguishable from one that is broken.
     fn apply_dialog_outcome(&mut self, outcome: DialogOutcome, ctx: &egui::Context) {
         match outcome {
-            // The same routing the session tree uses, and deliberately one function so the two
-            // cannot drift -- which they did, leaving the tree refusing protocols the dialog opened.
-            DialogOutcome::Accepted(config) => self.open_protocol(*config, ctx),
-            DialogOutcome::Cancelled => tracing::debug!("session dialog cancelled"),
+            // Either open it or write it back, depending on how the dialog was opened. The
+            // routing is one function on purpose so the tree and the dialog cannot drift -- which
+            // they did, leaving the tree refusing protocols the dialog had been opening.
+            DialogOutcome::Accepted(config) => match self.editing.take() {
+                Some(id) => self.save_edited_session(id, *config),
+                None => self.open_protocol(*config, ctx),
+            },
+            DialogOutcome::Cancelled => {
+                // Dropped, so a cancelled edit does not become the next accepted one's target.
+                self.editing = None;
+                tracing::debug!("session dialog cancelled");
+            }
             DialogOutcome::Unsupported(name) => {
                 tracing::warn!(protocol = name, "no session model for this protocol yet");
             }
@@ -1663,7 +1913,7 @@ impl eframe::App for BestTermApp {
         let mut actions: Vec<ChromeAction> = Vec::new();
         // Filled by the left panel, acted on after it has finished drawing.
         let mut requested_shell: Option<usize> = None;
-        let mut requested_session: Option<NodeId> = None;
+        let mut requested_session: Option<(NodeId, SessionAction)> = None;
 
         // Cloned once per frame so the panel closures below borrow a local rather than `self`,
         // which would otherwise conflict with the two closures that need `&mut self`. The theme is
@@ -1749,13 +1999,14 @@ impl eframe::App for BestTermApp {
         self.notice_window(&ctx);
         self.server_key_prompt(&ctx);
         self.configuration_dialog(&ctx);
+        self.rename_window(&ctx);
         self.tunnel_window(&ctx);
 
         if let Some(index) = requested_shell {
             self.open_shell(index, &ctx);
         }
-        if let Some(id) = requested_session {
-            self.open_saved_session(id, &ctx);
+        if let Some((id, action)) = requested_session {
+            self.apply_session_action(id, action, &ctx);
         }
 
         self.apply_actions(actions, &ctx);
@@ -1782,14 +2033,14 @@ impl BestTermApp {
         &mut self,
         ui: &mut egui::Ui,
         actions: &mut Vec<ChromeAction>,
-        requested_session: &mut Option<NodeId>,
+        requested_session: &mut Option<(NodeId, SessionAction)>,
     ) -> Option<usize> {
         match self.chrome.sidebar_panel {
             SidebarPanel::Sessions => {
                 ui.label(egui::RichText::new("User sessions").strong());
                 ui.separator();
-                if let Some(id) = self.session_tree(ui) {
-                    *requested_session = Some(id);
+                if let Some(chosen) = self.session_tree(ui) {
+                    *requested_session = Some(chosen);
                 }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Local shells").strong());
