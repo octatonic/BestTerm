@@ -410,6 +410,25 @@ impl BestTermApp {
         );
     }
 
+    /// Open a session of whatever protocol it is.
+    ///
+    /// One function, because there are two ways to ask -- the session tree and the Session dialog --
+    /// and while they were two `match`es the tree fell behind: double-clicking an imported RDP session
+    /// said RDP "cannot be opened yet", which had been false for some time.
+    fn open_protocol(&mut self, config: ProtocolConfig, ctx: &egui::Context) {
+        match config {
+            ProtocolConfig::Ssh(ssh) => self.connect_ssh(ssh, ctx),
+            ProtocolConfig::Rdp(rdp) => self.connect_rdp(rdp, ctx),
+            ProtocolConfig::Vnc(vnc) => self.connect_vnc(vnc, ctx),
+            ProtocolConfig::Telnet(telnet) => self.connect_telnet(telnet, ctx),
+            ProtocolConfig::Serial(serial) => self.open_serial(&serial, ctx),
+            other => self.notices.push(format!(
+                "{} sessions cannot be opened yet",
+                other.protocol().id()
+            )),
+        }
+    }
+
     /// Open a serial port.
     ///
     /// Synchronous, and not on the runtime: opening a port is a system call rather than a network
@@ -1403,16 +1422,10 @@ impl BestTermApp {
             return;
         };
         match &node.kind {
-            NodeKind::Session { config } => match config.as_ref() {
-                ProtocolConfig::Ssh(ssh) => {
-                    let ssh = ssh.clone();
-                    self.connect_ssh(ssh, ctx);
-                }
-                other => self.notices.push(format!(
-                    "{} sessions cannot be opened yet",
-                    other.protocol().id()
-                )),
-            },
+            NodeKind::Session { config } => {
+                let config = config.as_ref().clone();
+                self.open_protocol(config, ctx);
+            }
             NodeKind::Folder { .. } => {}
         }
     }
@@ -1456,23 +1469,9 @@ impl BestTermApp {
     /// indistinguishable from one that is broken.
     fn apply_dialog_outcome(&mut self, outcome: DialogOutcome, ctx: &egui::Context) {
         match outcome {
-            DialogOutcome::Accepted(config) => match *config {
-                bestterm_core_model::ProtocolConfig::Ssh(ssh) => self.connect_ssh(ssh, ctx),
-                bestterm_core_model::ProtocolConfig::Rdp(rdp) => self.connect_rdp(rdp, ctx),
-                bestterm_core_model::ProtocolConfig::Vnc(vnc) => self.connect_vnc(vnc, ctx),
-                bestterm_core_model::ProtocolConfig::Telnet(telnet) => {
-                    self.connect_telnet(telnet, ctx)
-                }
-                bestterm_core_model::ProtocolConfig::Serial(serial) => {
-                    self.open_serial(&serial, ctx)
-                }
-                other => {
-                    self.notices.push(format!(
-                        "{} sessions cannot be opened yet",
-                        other.protocol().id()
-                    ));
-                }
-            },
+            // The same routing the session tree uses, and deliberately one function so the two
+            // cannot drift -- which they did, leaving the tree refusing protocols the dialog opened.
+            DialogOutcome::Accepted(config) => self.open_protocol(*config, ctx),
             DialogOutcome::Cancelled => tracing::debug!("session dialog cancelled"),
             DialogOutcome::Unsupported(name) => {
                 tracing::warn!(protocol = name, "no session model for this protocol yet");

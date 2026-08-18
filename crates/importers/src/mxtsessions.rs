@@ -18,7 +18,7 @@
 
 use bestterm_core_model::{
     CredentialRef, ModelError, NodeId, ProtocolConfig, RdpConfig, SessionTree, SettingsOverride,
-    SshConfig, VncConfig,
+    SshAuth, SshConfig, VncConfig,
 };
 use bestterm_core_vault::Secret;
 
@@ -369,15 +369,53 @@ fn parse_session(name: &str, value: &str) -> Result<ParsedSession, SkipReason> {
     })
 }
 
+/// Where the private key path sits in a **type 0** session's connection group.
+///
+/// Measured against a real file of 128 SSH sessions: 122 carry a path here and six leave it empty, and
+/// there is no separate "use a key" flag -- fields 12, 13 and 15 are `0`, `0` and empty in every one
+/// of them. So the presence of a path *is* the flag.
+///
+/// This mattered more than a field index usually does. Without it every imported session defaulted to
+/// `SshAuth::Agent`, and on a machine whose ssh-agent is not running -- which is the Windows default,
+/// since the service ships disabled -- all 128 failed with "the ssh agent: early eof". The key was in
+/// the file the whole time.
+///
+/// # The index is per session type, not per file
+///
+/// Field 14 of a **type 7** session is the SFTP proxy password, which is why
+/// [`parse_session`] guards that read on the type. The first version of this generalised the index
+/// across both and turned a proxy password into a private key path; the importer's own test caught it.
+/// An index is only ever measured for the type it was measured on.
+const FIELD_PRIVATE_KEY: usize = 14;
+
 fn ssh_config(fields: &[&str]) -> SshConfig {
     SshConfig {
         host: field(fields, 1).map(unescape).unwrap_or_default(),
         port: port(fields, 2, 22),
         user: user(fields, 3),
+        auth: ssh_auth(fields),
         // Jump hosts are references to other sessions in the tree, and MobaXterm stores them as bare
         // hostnames. Resolving one to a node would mean inventing a session that may already exist
         // under another name, so the gateway is recorded as a note instead of guessed at.
         ..Default::default()
+    }
+}
+
+/// How an imported session authenticates.
+///
+/// A key if the file names one, and the agent otherwise -- which is the right default for a session
+/// that names nothing, because it is what already works for most people.
+///
+/// The passphrase is left absent rather than guessed. MobaXterm does not store one here, and claiming
+/// a vault entry that does not exist would turn "the key needs a passphrase" into "the vault holds no
+/// entry called ...", which sends somebody to the wrong place.
+fn ssh_auth(fields: &[&str]) -> SshAuth {
+    match field(fields, FIELD_PRIVATE_KEY).map(unescape) {
+        Some(path) if !path.trim().is_empty() => SshAuth::PublicKey {
+            path: path.trim().to_string(),
+            passphrase: None,
+        },
+        _ => SshAuth::Agent,
     }
 }
 
@@ -386,6 +424,9 @@ fn sftp_as_ssh(fields: &[&str]) -> SshConfig {
         host: field(fields, 1).map(unescape).unwrap_or_default(),
         port: port(fields, 2, 22),
         user: user(fields, 3),
+        // Not `ssh_auth`: field 14 of a type 7 session is the proxy password, not a key path. See
+        // `FIELD_PRIVATE_KEY`. Where an SFTP bookmark records its key is unmeasured, and the agent is
+        // the honest default for a session that names nothing this importer can read.
         ..Default::default()
     }
 }
@@ -669,6 +710,54 @@ mod tests {
         };
         assert_eq!(config.host, "files.int");
         assert_eq!(config.user.as_deref(), Some("ops"));
+    }
+
+    #[test]
+    fn an_ssh_session_with_a_key_authenticates_with_it_rather_than_the_agent() {
+        // The whole reason imported sessions did not work. Without this every one of them defaulted to
+        // the agent, and on Windows the OpenSSH agent service ships disabled -- so all 128 sessions in
+        // a real file failed with "the ssh agent: early eof" while their keys sat in the file.
+        let text = concat!(
+            "[Bookmarks]\r\n",
+            "SubRep=\r\n",
+            "srv=#109#0%srv.int%22%ops%-1%-1%%-1%-1%%%-1%0%0%",
+            r"D:\keys\ops.ppk",
+            "%%-1%0#MobaFont%10#0##-1\r\n",
+        );
+        let import = parse(text.as_bytes());
+
+        assert_eq!(
+            ssh_of(&import).auth,
+            SshAuth::PublicKey {
+                path: r"D:\keys\ops.ppk".to_string(),
+                passphrase: None
+            }
+        );
+    }
+
+    #[test]
+    fn an_ssh_session_with_no_key_still_uses_the_agent() {
+        // The right default for a session that names nothing: it is what already works for most people.
+        let text = concat!(
+            "[Bookmarks]\r\n",
+            "SubRep=\r\n",
+            "srv=#109#0%srv.int%22%ops%-1%-1%%-1%-1%%%-1%0%0%%%-1%0#MobaFont%10#0##-1\r\n",
+        );
+        let import = parse(text.as_bytes());
+        assert_eq!(ssh_of(&import).auth, SshAuth::Agent);
+    }
+
+    /// The single SSH session in an import, for the tests above.
+    fn ssh_of(import: &Import) -> SshConfig {
+        let id = import.tree.walk().first().copied().expect("one session");
+        let node = import.tree.get(id).expect("the node");
+        let bestterm_core_model::NodeKind::Session { config } = &node.kind else {
+            panic!("expected a session");
+        };
+        let ProtocolConfig::Ssh(ssh) = config.as_ref() else {
+            panic!("expected ssh, got {:?}", config.protocol())
+        };
+        ssh.clone()
     }
 
     #[test]

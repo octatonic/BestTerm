@@ -184,17 +184,29 @@ async fn authenticate_with_agent(handle: &mut Handle<Handler>, user: &str) -> Re
     // Windows has two agents in common use and they are different things, not two names for one.
     // OpenSSH's comes with the operating system, so it is tried first; Pageant is PuTTY's and is
     // what a long-time Windows user is more likely to already have running.
-    match AgentClient::connect_named_pipe(OPENSSH_AGENT_PIPE).await {
+    let openssh = match AgentClient::connect_named_pipe(OPENSSH_AGENT_PIPE).await {
         Ok(mut agent) => return offer_agent_identities(handle, user, &mut agent).await,
         Err(error) => {
             tracing::debug!(%error, "no OpenSSH agent pipe; trying Pageant");
+            error.to_string()
+        }
+    };
+
+    match AgentClient::connect_pageant().await {
+        Ok(mut agent) => offer_agent_identities(handle, user, &mut agent).await,
+        // Both failed, and what each said is nearly useless on its own: Pageant's absence surfaces as
+        // "early eof", which describes a socket rather than a problem. What somebody can act on is
+        // that neither agent is running -- and on Windows that is the *expected* state, because the
+        // OpenSSH agent service ships disabled. Saying so here saves an afternoon spent looking for a
+        // bug in the SSH client.
+        Err(pageant) => {
+            tracing::debug!(%pageant, "no Pageant either");
+            Err(SshError::NoAgent {
+                openssh,
+                pageant: pageant.to_string(),
+            })
         }
     }
-
-    let mut agent = AgentClient::connect_pageant()
-        .await
-        .map_err(|error| SshError::Agent(error.to_string()))?;
-    offer_agent_identities(handle, user, &mut agent).await
 }
 
 /// Offer each identity the agent holds until one is accepted.

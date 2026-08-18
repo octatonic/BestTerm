@@ -87,6 +87,22 @@ pub enum SshError {
     #[error("the ssh agent is running but holds no keys")]
     AgentHasNoKeys,
 
+    /// No agent is running at all.
+    ///
+    /// Windows only, and worth its own variant because it is the *expected* state there rather than a
+    /// fault: the OpenSSH agent service ships disabled, and Pageant only runs if somebody started it.
+    /// What each attempt said is kept for a log and left out of the message, because "early eof"
+    /// describes a socket and not a problem.
+    #[error(
+        "no SSH agent is running. Start the OpenSSH agent (`Set-Service ssh-agent -StartupType          Automatic; Start-Service ssh-agent`, then `ssh-add` your key) or start Pageant — or give          this session a private key of its own"
+    )]
+    NoAgent {
+        /// What the OpenSSH pipe said.
+        openssh: String,
+        /// And what Pageant said.
+        pageant: String,
+    },
+
     /// The user abandoned an interactive prompt.
     ///
     /// Not a wrong answer: nothing was rejected, so there is nothing to retry differently.
