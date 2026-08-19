@@ -43,6 +43,19 @@ pub(crate) struct ServerKeyQuestion {
     pub(crate) expected: Option<String>,
 }
 
+/// Whether what is typed and clicked reaches the far end.
+///
+/// A bool at the two call sites would read `false` and `config.view_only`, and the first of
+/// those says nothing about what it means. VNC has this as a session setting and people use it
+/// deliberately -- to watch a colleague work without taking their keyboard away from them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Input {
+    /// Keys and pointer events go to the remote end.
+    Allowed,
+    /// Nothing is sent. The desktop is watched, not driven.
+    ViewOnly,
+}
+
 /// A tab showing a remote desktop.
 pub(crate) struct SurfaceTab {
     /// The connection, whatever protocol is behind it.
@@ -73,6 +86,8 @@ pub(crate) struct SurfaceTab {
     /// into at all, or one that swallows every keystroke meant for the rest of the application.
     /// Clicking the desktop takes it; clicking anywhere else gives it back.
     focused: bool,
+    /// Whether input reaches the far end at all.
+    input: Input,
     /// The pane size the server was last asked to match.
     ///
     /// Kept so a window drag does not ask once per frame: every request makes the server re-run
@@ -98,6 +113,7 @@ impl SurfaceTab {
         surface: Box<dyn GraphicalSurface>,
         events: EventReceiver<SurfaceEvent>,
         title: String,
+        input: Input,
     ) -> Self {
         Self {
             surface,
@@ -112,6 +128,7 @@ impl SurfaceTab {
             settled_key: None,
             notices: Vec::new(),
             focused: false,
+            input,
             asked_for: None,
         }
     }
@@ -131,12 +148,18 @@ impl SurfaceTab {
         match &self.closed {
             Some(Some(reason)) => format!("{} — closed ({reason})", self.title),
             Some(None) => format!("{} — closed", self.title),
+            // The view-only note is here because a session that silently ignores the keyboard is
+            // indistinguishable from a broken one, and somebody would reasonably file that as a bug.
             None => format!(
-                "{} {} — {}×{}",
+                "{} {} — {}×{}{}",
                 self.surface.kind(),
                 self.title,
                 self.size.width,
-                self.size.height
+                self.size.height,
+                match self.input {
+                    Input::Allowed => "",
+                    Input::ViewOnly => " — view only",
+                }
             ),
         }
     }
@@ -420,6 +443,18 @@ impl SurfaceTab {
             }
         }
 
+        self.deliver(send);
+    }
+
+    /// Hand collected input to the surface, unless the session is one nobody may type into.
+    ///
+    /// The gate is here, on the way out, rather than at each of the places an event is collected:
+    /// one place to be wrong, and it stays right when a new kind of event is added.
+    fn deliver(&mut self, send: Vec<InputEvent>) {
+        if self.input == Input::ViewOnly {
+            return;
+        }
+
         for event in send {
             if let Err(error) = self.surface.send_input(event) {
                 // Once. A broken pipe reports itself on every event, and the close notification is
@@ -460,5 +495,96 @@ impl SurfaceTab {
         if let Err(error) = self.surface.shutdown() {
             tracing::debug!(%error, "shutting down the surface failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// A surface that records what it was asked to send and connects to nothing.
+    struct Recorder(Arc<Mutex<Vec<InputEvent>>>);
+
+    impl GraphicalSurface for Recorder {
+        fn kind(&self) -> SurfaceKind {
+            SurfaceKind::Vnc
+        }
+
+        fn send_input(&mut self, input: InputEvent) -> bestterm_surface::Result<()> {
+            self.0.lock().expect("not poisoned").push(input);
+            Ok(())
+        }
+
+        fn request_resize(&mut self, _size: FrameSize) -> bestterm_surface::Result<()> {
+            Ok(())
+        }
+
+        fn with_frame(&self, _f: &mut dyn FnMut(&FrameMeta, &[u8])) {}
+
+        fn shutdown(&mut self) -> bestterm_surface::Result<()> {
+            Ok(())
+        }
+
+        fn label(&self) -> String {
+            "recorder".to_string()
+        }
+    }
+
+    fn tab(input: Input) -> (SurfaceTab, Arc<Mutex<Vec<InputEvent>>>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let (_send, events) = crossbeam_channel::unbounded();
+        let tab = SurfaceTab::adopt(
+            Box::new(Recorder(Arc::clone(&sent))),
+            events,
+            "a desktop".to_string(),
+            input,
+        );
+        (tab, sent)
+    }
+
+    fn some_input() -> Vec<InputEvent> {
+        vec![
+            InputEvent::PointerMove { x: 10, y: 20 },
+            InputEvent::Key {
+                scancode: 0x1e,
+                pressed: true,
+                mods: Modifiers::default(),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_view_only_session_sends_nothing_at_all() {
+        // `view_only` is imported from .mxtsessions and was ignored, so a session somebody marked
+        // view-only would still type into the desktop it was watching. Not a cosmetic setting: it is
+        // there so a colleague's keyboard stays theirs.
+        let (mut tab, sent) = tab(Input::ViewOnly);
+        tab.deliver(some_input());
+        assert!(
+            sent.lock().expect("not poisoned").is_empty(),
+            "a view-only session put input on the wire"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_session_still_sends_everything() {
+        // The other half of the gate. A guard that dropped everything would pass the test above.
+        let (mut tab, sent) = tab(Input::Allowed);
+        tab.deliver(some_input());
+        assert_eq!(sent.lock().expect("not poisoned").len(), 2);
+    }
+
+    #[test]
+    fn a_view_only_session_says_so_in_the_status_bar() {
+        // Otherwise it is indistinguishable from a session that has stopped responding.
+        let (view_only, _) = tab(Input::ViewOnly);
+        assert!(
+            view_only.status_line().contains("view only"),
+            "{}",
+            view_only.status_line()
+        );
+        let (ordinary, _) = tab(Input::Allowed);
+        assert!(!ordinary.status_line().contains("view only"));
     }
 }

@@ -581,7 +581,13 @@ impl BestTermApp {
             waker,
         ) {
             Ok((surface, events)) => {
-                let tab = crate::surface_tab::SurfaceTab::adopt(Box::new(surface), events, label);
+                let tab = crate::surface_tab::SurfaceTab::adopt(
+                    Box::new(surface),
+                    events,
+                    label,
+                    // RDP has no view-only mode: the protocol has no way to ask for one.
+                    crate::surface_tab::Input::Allowed,
+                );
                 self.tabs.push(pane::Pane::Surface(Box::new(tab)));
                 self.chrome.active_tab = self.tabs.len() - 1;
             }
@@ -596,6 +602,7 @@ impl BestTermApp {
     /// than left in a log, because a password typed into a VNC session is a password on the wire.
     fn connect_vnc(&mut self, config: bestterm_core_model::VncConfig, ctx: &egui::Context) {
         let label = format!("{}:{}", config.host, config.port);
+        let view_only = config.view_only;
         self.notices.push(format!(
             "{label}: VNC is not encrypted — the desktop and everything typed into it travel in              clear text"
         ));
@@ -646,7 +653,18 @@ impl BestTermApp {
             waker,
         ) {
             Ok((surface, events)) => {
-                let tab = crate::surface_tab::SurfaceTab::adopt(Box::new(surface), events, label);
+                let tab = crate::surface_tab::SurfaceTab::adopt(
+                    Box::new(surface),
+                    events,
+                    label,
+                    // Honoured here rather than in the helper, so no keystroke is ever put on a
+                    // wire it should not be on. Imported from .mxtsessions and, until now, ignored.
+                    if view_only {
+                        crate::surface_tab::Input::ViewOnly
+                    } else {
+                        crate::surface_tab::Input::Allowed
+                    },
+                );
                 self.tabs.push(pane::Pane::Surface(Box::new(tab)));
                 self.chrome.active_tab = self.tabs.len() - 1;
             }

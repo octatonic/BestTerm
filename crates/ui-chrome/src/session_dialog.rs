@@ -243,6 +243,8 @@ pub struct SessionFields {
     pub rdp_clipboard: bool,
     /// Span an RDP session across every local monitor.
     pub rdp_multi_monitor: bool,
+    /// Watch a VNC desktop without sending anything to it.
+    pub vnc_view_only: bool,
     /// Serial device.
     pub serial_port: String,
     /// Serial speed in bits per second.
@@ -343,6 +345,7 @@ impl Default for SessionFields {
             // people arrive from. Multi-monitor is off, because spanning is a deliberate choice.
             rdp_clipboard: true,
             rdp_multi_monitor: false,
+            vnc_view_only: false,
             serial_port: String::new(),
             baud: String::new(),
             path: String::new(),
@@ -521,6 +524,7 @@ impl SessionDialog {
                 self.protocol = DialogProtocol::Vnc;
                 self.fields.host = vnc.host.clone();
                 self.fields.port = vnc.port.to_string();
+                self.fields.vnc_view_only = vnc.view_only;
             }
             ProtocolConfig::Serial(serial) => {
                 self.protocol = DialogProtocol::Serial;
@@ -588,6 +592,7 @@ impl SessionDialog {
             (ProtocolConfig::Vnc(new), ProtocolConfig::Vnc(old)) => {
                 old.host = new.host;
                 old.port = new.port;
+                old.view_only = new.view_only;
             }
             (ProtocolConfig::Serial(new), ProtocolConfig::Serial(old)) => {
                 old.device = new.device;
@@ -796,6 +801,7 @@ impl SessionDialog {
                 DialogOutcome::Accepted(Box::new(ProtocolConfig::Vnc(VncConfig {
                     host: host.to_owned(),
                     port,
+                    view_only: self.fields.vnc_view_only,
                     ..VncConfig::default()
                 })))
             }
@@ -1139,6 +1145,10 @@ fn advanced_tab(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
         rdp_advanced_tab(ui, theme, &mut dialog.fields);
         return;
     }
+    if dialog.protocol == DialogProtocol::Vnc {
+        vnc_advanced_tab(ui, theme, &mut dialog.fields);
+        return;
+    }
     if dialog.protocol != DialogProtocol::Ssh {
         // What the reference itself shows in an advanced tab it has nothing to put in: the protocol's
         // name and its icon, filling the space. Measured from the RDP tab, which looks exactly like
@@ -1240,6 +1250,29 @@ fn advanced_tab(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
 }
 
 /// The terminal tab.
+/// Advanced VNC settings.
+///
+/// One control, and it is the one that matters most: the importer has been reading `view only` out
+/// of .mxtsessions since it was written, and nothing could see or change it. The reference's tab
+/// also has scaling, colour depth and an encoding list; those wait until the helper can be told
+/// about them.
+fn vnc_advanced_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
+    ui.checkbox(
+        &mut fields.vnc_view_only,
+        "View only — do not send keyboard or mouse to the remote desktop",
+    );
+
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(
+            "Acted on: nothing typed or clicked leaves this machine, and the status bar says so \
+             while the session is open.",
+        )
+        .small()
+        .color(theme.text_dim),
+    );
+}
+
 /// Advanced RDP settings.
 ///
 /// Not measured against the reference, which has a much larger tab -- display resolution, sound,
@@ -1894,6 +1927,38 @@ mod tests {
         assert_eq!(starting_directory("   "), None);
         assert_eq!(starting_directory(""), None);
         assert_eq!(starting_directory("Z:/no/such/place/key.ppk"), None);
+    }
+
+    #[test]
+    fn a_vnc_session_can_be_told_not_to_send_input() {
+        // Read from .mxtsessions since the importer was written, and until now there was nowhere
+        // to see it and no way to change it -- so a session marked view-only typed into the
+        // desktop anyway. Checked in both directions for the same reason as the RDP case.
+        let existing = ProtocolConfig::Vnc(VncConfig {
+            host: "host.invalid".to_owned(),
+            port: 5901,
+            view_only: true,
+            ..VncConfig::default()
+        });
+
+        let mut dialog = SessionDialog::default();
+        dialog.open_for(&existing);
+        assert!(dialog.fields.vnc_view_only, "the setting reaches the tab");
+
+        dialog.fields.vnc_view_only = false;
+        let mut target = existing.clone();
+        match dialog.build() {
+            DialogOutcome::Accepted(produced) => SessionDialog::merge_into(*produced, &mut target),
+            other => panic!("the dialog refused a complete VNC session: {other:?}"),
+        }
+
+        let ProtocolConfig::Vnc(vnc) = target else {
+            panic!("a VNC session stopped being one")
+        };
+        assert!(
+            !vnc.view_only,
+            "turning it off has to stick, or it cannot be undone"
+        );
     }
 
     #[test]
