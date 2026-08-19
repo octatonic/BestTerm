@@ -1985,11 +1985,15 @@ impl eframe::App for BestTermApp {
                 .collapsible(false)
                 .default_width(886.0)
                 .default_height(589.0)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                // Placed once, not anchored. `Window::anchor` means "stay at this point", which makes
+                // the window impossible to drag -- so the first version centred it and pinned it there,
+                // over the tree it was editing a session from.
+                .default_pos(centre_of(&ctx, egui::vec2(886.0, 589.0)))
                 .show(&ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        session_dialog(ui, &theme, &mut self.dialog);
-                    });
+                    // No scroll area: it reported an unbounded width to the wrapped row of protocol
+                    // tabs, which then laid fourteen of the fifteen outside the window. A resizable
+                    // window is the right answer to content that does not fit.
+                    session_dialog(ui, &theme, &mut self.dialog);
                 });
             if !open {
                 // The window's own cross, which has to mean the same thing as Cancel.
@@ -2219,6 +2223,21 @@ fn parse_quick_connect(text: &str) -> Option<bestterm_core_model::SshConfig> {
         user,
         ..bestterm_core_model::SshConfig::default()
     })
+}
+
+/// Where to put a window of `size` so it starts in the middle.
+///
+/// Computed rather than anchored, because an anchored window cannot be moved. Falls back to the
+/// origin on the first frame, before the screen's size is known -- by which time the window has
+/// already been placed and the fallback no longer matters.
+fn centre_of(ctx: &egui::Context, size: egui::Vec2) -> egui::Pos2 {
+    // `raw.screen_rect` rather than a method: egui 0.36 has no `Context::screen_rect`, and the raw
+    // input is where the windowing layer puts it.
+    let screen = ctx
+        .input(|input| input.raw.screen_rect)
+        .unwrap_or(egui::Rect::ZERO);
+    let centre = screen.center() - size / 2.0;
+    egui::pos2(centre.x.max(screen.left()), centre.y.max(screen.top()))
 }
 
 /// Split `user@host` or `host` back into a host and a port.

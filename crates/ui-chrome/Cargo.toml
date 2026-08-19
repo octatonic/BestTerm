@@ -16,3 +16,4 @@ workspace = true
 # session model has exactly one definition. See src/session_dialog.rs.
 bestterm-core-model.workspace = true
 egui.workspace = true
+rfd.workspace = true

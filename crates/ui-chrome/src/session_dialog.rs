@@ -213,7 +213,7 @@ impl SecondaryTab {
             Self::Advanced => "Advanced settings",
             Self::Terminal => "Terminal settings",
             Self::Network => "Network settings",
-            Self::Bookmark => "★ Bookmark settings",
+            Self::Bookmark => "Bookmark settings",
         }
     }
 }
@@ -844,12 +844,16 @@ pub fn session_dialog(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDial
     let buttons = 200.0;
     ui.horizontal(|ui| {
         ui.add_space(((ui.available_width() - buttons) / 2.0).max(0.0));
-        if ui.button("✓  OK").clicked() {
+        // Plain words. `✓` and `✕` are not in egui's bundled font, so they drew as hollow boxes --
+        // the same trap that put an empty square on every folder in the session tree. The reference
+        // has a tick and a cross here; ours will too once the icons are drawn into buttons rather
+        // than typed as text.
+        if ui.button("  OK  ").clicked() {
             dialog.outcome = Some(dialog.build());
             dialog.open = false;
         }
         ui.add_space(12.0);
-        if ui.button("✕  Cancel").clicked() {
+        if ui.button("Cancel").clicked() {
             dialog.outcome = Some(DialogOutcome::Cancelled);
             dialog.open = false;
         }
@@ -860,7 +864,7 @@ fn title_row(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
     ui.horizontal(|ui| {
         ui.label("Session settings");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button("✕").clicked() {
+            if ui.small_button("x").clicked() {
                 dialog.outcome = Some(DialogOutcome::Cancelled);
                 dialog.open = false;
             }
@@ -887,6 +891,28 @@ fn protocol_strip(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) 
     });
 }
 
+/// Which icon a protocol tab carries.
+///
+/// Beside the tab that draws it, and keyed on the label so the list is one place. Anything without
+/// a picture of its own gets the terminal, which is what the protocols without one are.
+fn dialog_icon(label: &str) -> crate::icons::Icon {
+    use crate::icons::Icon;
+    match label {
+        "SSH" => Icon::Ssh,
+        "Telnet" | "Rsh" | "Mosh" => Icon::Session,
+        "Xdmcp" => Icon::X11,
+        "RDP" => Icon::Rdp,
+        "VNC" => Icon::Vnc,
+        "FTP" | "SFTP" => Icon::Folder,
+        "Serial" => Icon::Toolbar,
+        "File" => Icon::File,
+        "Shell" | "WSL" => Icon::Session,
+        "Browser" => Icon::Help,
+        "Aws S3" => Icon::Packages,
+        _ => Icon::Session,
+    }
+}
+
 fn protocol_tab(ui: &mut Ui, theme: &ChromeTheme, label: &str, selected: bool) -> egui::Response {
     let width = 52.0;
     let height = 52.0;
@@ -906,18 +932,14 @@ fn protocol_tab(ui: &mut Ui, theme: &ChromeTheme, label: &str, selected: bool) -
             painter.rect_filled(rect, CornerRadius::ZERO, theme.hover_bg);
         }
 
-        // The hollow square that stands in for the icon set, as everywhere else.
+        // The real icon. This drew a hollow square until now -- a leftover from before the icon set
+        // existed -- so all fifteen tabs looked like empty checkboxes above their labels.
         let side = 20.0;
         let icon = Rect::from_center_size(
             egui::pos2(rect.center().x, rect.top() + 6.0 + side / 2.0),
             vec2(side, side),
         );
-        painter.rect_stroke(
-            icon,
-            CornerRadius::ZERO,
-            Stroke::new(1.0, theme.text_dim),
-            egui::StrokeKind::Inside,
-        );
+        crate::icons::draw(painter, icon, dialog_icon(label));
         painter.text(
             egui::pos2(rect.center().x, icon.bottom() + 3.0),
             Align2::CENTER_TOP,
@@ -1148,13 +1170,13 @@ fn advanced_tab(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
         // Editable whether or not the box is ticked, so a path can be typed before it is turned on --
         // which is the order people do it in.
         ui.add(egui::TextEdit::singleline(&mut fields.private_key).desired_width(210.0));
-        if ui
-            .button("📄")
-            .on_hover_text("There is no file picker yet — type or paste the path")
-            .clicked()
+        if ui.button("Browse…").clicked()
+            && let Some(path) = pick_private_key(&fields.private_key)
         {
-            // Deliberately nothing: a button that opened nothing would be worse than one whose
-            // tooltip says where the path comes from.
+            fields.private_key = path;
+            // Choosing a key is choosing to use one. Leaving the box unticked after somebody went
+            // and found the file would be a form that ignored what they just did.
+            fields.use_private_key = true;
         }
     });
     ui.add_space(6.0);
@@ -1211,6 +1233,12 @@ fn terminal_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
     ui.horizontal(|ui| {
         ui.checkbox(&mut fields.log_output, "Log terminal output to:");
         ui.add(egui::TextEdit::singleline(&mut fields.log_path).desired_width(210.0));
+        if ui.button("Browse…").clicked()
+            && let Some(path) = pick_log_file(&fields.log_path)
+        {
+            fields.log_path = path;
+            fields.log_output = true;
+        }
         ui.add_space(16.0);
         ui.label("Paste delay:");
         choice(
@@ -1331,7 +1359,7 @@ fn bookmark_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
 
     ui.add_space(8.0);
     let _ = ui
-        .button("★  Create a desktop shortcut to this session")
+        .button("Create a desktop shortcut to this session")
         .on_hover_text("Not implemented yet");
 
     ui.add_space(4.0);
@@ -1343,6 +1371,62 @@ fn bookmark_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
         .small()
         .color(theme.text_dim),
     );
+}
+
+/// Ask for a private key file.
+///
+/// The platform's own dialog, through `rfd`. Blocking on purpose: the interface is already stopped
+/// while a modal is open, and a picker that returned later would have to find its way back to a
+/// field that may no longer be on screen.
+///
+/// The filter names the formats people actually have. `.ppk` is PuTTY's, which is what an imported
+/// MobaXterm session points at — and `proto-ssh` reads OpenSSH keys, so a `.ppk` will be refused
+/// later with a message about the format rather than silently.
+fn pick_private_key(current: &str) -> Option<String> {
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("Choose a private key")
+        .add_filter(
+            "Private keys",
+            &["ppk", "pem", "key", "id_rsa", "id_ed25519"],
+        )
+        .add_filter("All files", &["*"]);
+    if let Some(directory) = starting_directory(current) {
+        dialog = dialog.set_directory(directory);
+    }
+    dialog
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Ask where a transcript should go.
+///
+/// A save dialog rather than an open one: the file does not exist yet, and an open dialog would
+/// refuse to hand back a name that is not already there.
+fn pick_log_file(current: &str) -> Option<String> {
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("Where to write the transcript")
+        .add_filter("Text files", &["txt", "log"])
+        .add_filter("All files", &["*"]);
+    if let Some(directory) = starting_directory(current) {
+        dialog = dialog.set_directory(directory);
+    }
+    dialog
+        .save_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Where a picker should open, given whatever is in the field.
+///
+/// The field's own directory when it names one that exists, so a second visit starts where the
+/// first left off. `None` lets the platform decide, which is better than starting somewhere
+/// arbitrary of ours.
+fn starting_directory(current: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(current.trim());
+    if current.trim().is_empty() {
+        return None;
+    }
+    let directory = if path.is_dir() { path } else { path.parent()? };
+    directory.is_dir().then(|| directory.to_path_buf())
 }
 
 /// A dropdown over a fixed list of labels, selected by index.
@@ -1609,6 +1693,144 @@ mod tests {
     }
 
     #[test]
+    fn all_fifteen_protocol_tabs_are_laid_out_inside_the_dialog() {
+        // The bug this exists for was visible and I did not see it: the strip drew one tab of fifteen,
+        // because the dialog was wrapped in a vertical scroll area that reported an unbounded width to
+        // the wrapped row. Fourteen tabs were laid out past the right edge of the window.
+        //
+        // Checked as geometry rather than by eye: every tab has to land inside the width it was given.
+        let ctx = egui::Context::default();
+        let theme = ChromeTheme::light();
+        let mut dialog = SessionDialog {
+            open: true,
+            ..SessionDialog::default()
+        };
+
+        let width = 886.0;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(width, 589.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                session_dialog(ui, &theme, &mut dialog);
+            },
+        );
+        output.textures_delta.clear();
+
+        // Every rectangle the frame emitted, so a tab pushed off the edge is caught wherever it went.
+        let mut widest = 0.0f32;
+        for clipped in &output.shapes {
+            let rect = clipped.shape.visual_bounding_rect();
+            if rect.is_finite() && rect.is_positive() {
+                widest = widest.max(rect.right());
+            }
+        }
+        assert!(
+            widest <= width + 1.0,
+            "something was drawn {widest} across a {width} dialog, which is how fourteen protocol \
+             tabs ended up outside the window"
+        );
+    }
+
+    #[test]
+    fn every_protocol_tab_has_an_icon_of_its_own_kind() {
+        // It drew a hollow placeholder square for every one of the fifteen until now, so they all looked
+        // like empty checkboxes above their labels.
+        for protocol in DialogProtocol::ALL {
+            let icon = dialog_icon(protocol.label());
+            // Not a specific icon per protocol -- several genuinely share one, and a terminal is what a
+            // protocol without a picture of its own is -- but the two that have pictures must use them.
+            match protocol {
+                DialogProtocol::Rdp => assert_eq!(icon, crate::icons::Icon::Rdp),
+                DialogProtocol::Vnc => assert_eq!(icon, crate::icons::Icon::Vnc),
+                DialogProtocol::Ssh => assert_eq!(icon, crate::icons::Icon::Ssh),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn every_label_the_dialog_shows_is_one_the_bundled_font_can_draw() {
+        // `✓`, `✕` and `★` are not in egui's bundled font and drew as hollow boxes — the same trap
+        // that put an empty square on every folder in the session tree earlier in this project.
+        //
+        // Checked on the strings themselves. The first version of this searched this file's own source
+        // and tripped on the comment above, which has to name the glyphs to talk about them — exactly
+        // how the artwork test in `icons.rs` failed twice before it was deleted. A rule about what is
+        // in a font is a rule about values, not about text.
+        let mut labels: Vec<String> = Vec::new();
+        labels.extend(DialogProtocol::ALL.iter().map(|p| p.label().to_string()));
+        labels.extend(
+            DialogProtocol::ALL
+                .iter()
+                .map(|p| p.group_name().to_string()),
+        );
+        labels.extend(
+            DialogProtocol::ALL
+                .iter()
+                .map(|p| p.description().to_string()),
+        );
+        labels.extend(
+            [
+                SecondaryTab::Advanced,
+                SecondaryTab::Terminal,
+                SecondaryTab::Network,
+                SecondaryTab::Bookmark,
+            ]
+            .iter()
+            .map(|tab| tab.label().to_string()),
+        );
+        for list in [
+            REMOTE_ENVIRONMENTS,
+            BROWSER_TYPES,
+            MACRO_CHOICES,
+            TERMINAL_TYPES,
+            PASTE_DELAYS,
+            HIGHLIGHTING,
+            START_IN,
+            SHELL_CHOICES,
+        ] {
+            labels.extend(list.iter().map(|entry| (*entry).to_string()));
+        }
+
+        for label in labels {
+            for character in label.chars() {
+                // Latin-1 and the handful of punctuation the bundled font covers. Anything outside it
+                // is a box on screen, and a box beside a label reads as a broken control.
+                assert!(
+                    character.is_ascii() || (0xA0..=0xFF).contains(&(character as u32)),
+                    "{character:?} in {label:?} is outside what the bundled font covers"
+                );
+            }
+        }
+    }
+    #[test]
+    fn a_picker_opens_where_the_field_already_points() {
+        // So a second visit starts where the first left off, rather than somewhere arbitrary of ours.
+        let temp = std::env::temp_dir();
+        let inside = temp.join("a-key-that-need-not-exist.ppk");
+        assert_eq!(
+            starting_directory(&inside.to_string_lossy()),
+            Some(temp.clone()),
+            "the file's directory"
+        );
+        assert_eq!(
+            starting_directory(&temp.to_string_lossy()),
+            Some(temp),
+            "a directory is its own starting point"
+        );
+
+        // Nothing typed, and a path whose directory does not exist: let the platform decide.
+        assert_eq!(starting_directory("   "), None);
+        assert_eq!(starting_directory(""), None);
+        assert_eq!(starting_directory("Z:/no/such/place/key.ppk"), None);
+    }
+
+    #[test]
     fn every_protocol_has_an_advanced_and_a_bookmark_tab() {
         // Both are in the enum precisely so they can be selected. Before that the row was four labels
         // that could be clicked and did nothing.
@@ -1619,7 +1841,7 @@ mod tests {
             };
             assert_eq!(dialog.secondary, SecondaryTab::Advanced, "{protocol:?}");
         }
-        assert_eq!(SecondaryTab::Bookmark.label(), "★ Bookmark settings");
+        assert_eq!(SecondaryTab::Bookmark.label(), "Bookmark settings");
     }
 
     #[test]

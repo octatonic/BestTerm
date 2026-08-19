@@ -108,6 +108,10 @@ sha1 = "0.11"
 # already in the graph transitively; naming them makes the dependency deliberate.
 des = "0.9"
 flate2 = "1.1"
+# The platform's own file dialog: the Win32 common dialog, and the portal or GTK on Linux. MIT.
+# The default features are the right ones: the XDG portal on Linux, which works under Wayland and
+# X11 alike and needs no GTK at build time, and the Win32 common dialog on Windows.
+rfd = "0.17"
 serialport = { version = "4.7", default-features = false }
 sha2 = "0.11"
 
