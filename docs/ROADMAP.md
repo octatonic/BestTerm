@@ -121,7 +121,10 @@ The interface was built before the renderer it assumed.
   its clipboard and multi-monitor flags are stored and not yet acted on. VNC's `view only` is acted
   on. Display resolution, sound, device redirection and gateways for RDP, and scaling, colour depth
   and the encoding list for VNC, are not there at all.
-* The other twelve protocols' advanced tabs say plainly that they have not been measured.
+* Serial's advanced tab carries the framing -- data bits, parity, stop bits, flow control -- and all
+  four are applied when the port is opened. Not transcribed from the reference: they are what
+  `SerialConfig` holds, and they were reachable only by editing a session file by hand.
+* The other eleven protocols' advanced tabs say plainly that they have not been measured.
 * The Configuration dialog has its seven tabs; only `General` is measured.
 * The Tools and Macros sidebar panels are catalogues with no behaviour behind them.
 

@@ -245,6 +245,14 @@ pub struct SessionFields {
     pub rdp_multi_monitor: bool,
     /// Watch a VNC desktop without sending anything to it.
     pub vnc_view_only: bool,
+    /// Index into [`DATA_BITS`].
+    pub serial_data_bits: usize,
+    /// Index into [`PARITIES`].
+    pub serial_parity: usize,
+    /// Index into [`STOP_BITS`].
+    pub serial_stop_bits: usize,
+    /// Index into [`FLOW_CONTROLS`].
+    pub serial_flow_control: usize,
     /// Serial device.
     pub serial_port: String,
     /// Serial speed in bits per second.
@@ -346,6 +354,13 @@ impl Default for SessionFields {
             rdp_clipboard: true,
             rdp_multi_monitor: false,
             vnc_view_only: false,
+            // 8N1 and no flow control, which is what console cables are wired for -- and what
+            // `SerialConfig::default()` says, which these have to agree with or a new session
+            // would open framed differently from an untouched one.
+            serial_data_bits: 3,
+            serial_parity: 0,
+            serial_stop_bits: 0,
+            serial_flow_control: 0,
             serial_port: String::new(),
             baud: String::new(),
             path: String::new(),
@@ -385,6 +400,21 @@ impl Default for SessionFields {
         }
     }
 }
+
+/// Data bits a serial port can be framed with.
+///
+/// Five and six exist because teletype-era equipment used them, and equipment like that is
+/// exactly what a serial console is still attached to.
+pub const DATA_BITS: &[&str] = &["5", "6", "7", "8"];
+
+/// Parity choices, in the order the model's enum declares them.
+pub const PARITIES: &[&str] = &["None", "Odd", "Even"];
+
+/// Stop bits. The model holds a number, not an enum, and 1.5 is not representable in it.
+pub const STOP_BITS: &[&str] = &["1", "2"];
+
+/// Flow control, in the order the model's enum declares them.
+pub const FLOW_CONTROLS: &[&str] = &["None", "Xon/Xoff (software)", "RTS/CTS (hardware)"];
 
 /// What the Advanced tab's `Remote environment` offers.
 ///
@@ -530,6 +560,24 @@ impl SessionDialog {
                 self.protocol = DialogProtocol::Serial;
                 self.fields.serial_port = serial.device.clone();
                 self.fields.baud = serial.baud.to_string();
+                // Clamped rather than trusted: the model holds numbers, and a session file is
+                // somebody's to edit. An out-of-range value shows as the default instead of
+                // panicking on an index, and is written back as the default it displayed.
+                self.fields.serial_data_bits = DATA_BITS
+                    .iter()
+                    .position(|bits| *bits == serial.data_bits.to_string())
+                    .unwrap_or(3);
+                self.fields.serial_parity = match serial.parity {
+                    bestterm_core_model::Parity::None => 0,
+                    bestterm_core_model::Parity::Odd => 1,
+                    bestterm_core_model::Parity::Even => 2,
+                };
+                self.fields.serial_stop_bits = usize::from(serial.stop_bits == 2);
+                self.fields.serial_flow_control = match serial.flow_control {
+                    bestterm_core_model::FlowControl::None => 0,
+                    bestterm_core_model::FlowControl::Software => 1,
+                    bestterm_core_model::FlowControl::Hardware => 2,
+                };
             }
             // A protocol this dialog cannot show opens on its own tab with nothing filled in,
             // rather than on the SSH tab with the wrong fields: an empty form says "not yet" and a
@@ -597,6 +645,13 @@ impl SessionDialog {
             (ProtocolConfig::Serial(new), ProtocolConfig::Serial(old)) => {
                 old.device = new.device;
                 old.baud = new.baud;
+                // Copied now that the tab shows them. Framing is the difference between a
+                // console that reads and one that prints rubbish, so it is not a setting to
+                // leave stranded in a file nobody can reach.
+                old.data_bits = new.data_bits;
+                old.parity = new.parity;
+                old.stop_bits = new.stop_bits;
+                old.flow_control = new.flow_control;
             }
             // The protocol changed, which is a replacement rather than an edit: nothing of the old
             // configuration means anything under the new one.
@@ -823,11 +878,25 @@ impl SessionDialog {
                 DialogOutcome::Accepted(Box::new(ProtocolConfig::Serial(SerialConfig {
                     device: device.to_owned(),
                     baud,
-                    // 8N1 with no flow control, which is what console cables are wired for. The
-                    // dialog does not collect the rest yet; `docs/ui-parity.md` has not measured that
-                    // tab, and inventing fields would put settings on screen the reference does not
-                    // have.
-                    ..SerialConfig::default()
+                    data_bits: DATA_BITS
+                        .get(self.fields.serial_data_bits)
+                        .and_then(|bits| bits.parse().ok())
+                        .unwrap_or(8),
+                    parity: match self.fields.serial_parity {
+                        1 => bestterm_core_model::Parity::Odd,
+                        2 => bestterm_core_model::Parity::Even,
+                        _ => bestterm_core_model::Parity::None,
+                    },
+                    stop_bits: if self.fields.serial_stop_bits == 1 {
+                        2
+                    } else {
+                        1
+                    },
+                    flow_control: match self.fields.serial_flow_control {
+                        1 => bestterm_core_model::FlowControl::Software,
+                        2 => bestterm_core_model::FlowControl::Hardware,
+                        _ => bestterm_core_model::FlowControl::None,
+                    },
                 })))
             }
             // Shell and the rest need fields this dialog does not yet collect, or a model variant
@@ -1149,6 +1218,10 @@ fn advanced_tab(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
         vnc_advanced_tab(ui, theme, &mut dialog.fields);
         return;
     }
+    if dialog.protocol == DialogProtocol::Serial {
+        serial_advanced_tab(ui, theme, &mut dialog.fields);
+        return;
+    }
     if dialog.protocol != DialogProtocol::Ssh {
         // What the reference itself shows in an advanced tab it has nothing to put in: the protocol's
         // name and its icon, filling the space. Measured from the RDP tab, which looks exactly like
@@ -1250,6 +1323,65 @@ fn advanced_tab(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
 }
 
 /// The terminal tab.
+/// Advanced serial settings: the framing.
+///
+/// Not transcribed from the reference -- these are the four values `SerialConfig` holds, and the
+/// transport already applies every one of them when it opens the port. They were reachable only
+/// by editing the session file by hand, which for the setting that decides whether a console
+/// prints text or rubbish is the wrong place for it to live.
+fn serial_advanced_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
+    ui.horizontal(|ui| {
+        ui.label("Data bits:");
+        choice(
+            ui,
+            "serial-data-bits",
+            &mut fields.serial_data_bits,
+            DATA_BITS,
+            60.0,
+        );
+        ui.add_space(16.0);
+        ui.label("Stop bits:");
+        choice(
+            ui,
+            "serial-stop-bits",
+            &mut fields.serial_stop_bits,
+            STOP_BITS,
+            60.0,
+        );
+    });
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ui.label("Parity:");
+        choice(
+            ui,
+            "serial-parity",
+            &mut fields.serial_parity,
+            PARITIES,
+            110.0,
+        );
+        ui.add_space(16.0);
+        ui.label("Flow control:");
+        choice(
+            ui,
+            "serial-flow",
+            &mut fields.serial_flow_control,
+            FLOW_CONTROLS,
+            170.0,
+        );
+    });
+
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(
+            "All four are applied when the port is opened. The default is 8N1 with no flow \
+             control, which is how console cables are wired.",
+        )
+        .small()
+        .color(theme.text_dim),
+    );
+}
+
 /// Advanced VNC settings.
 ///
 /// One control, and it is the one that matters most: the importer has been reading `view only` out
@@ -1967,6 +2099,75 @@ mod tests {
         assert_eq!(ssh.host, "new.invalid", "the edit still lands");
         assert_eq!(ssh.jump_hosts, vec![bastion], "the bastion chain survives");
         assert_eq!(ssh.forwards, vec![forward], "and so does the tunnel");
+    }
+
+    #[test]
+    fn serial_framing_survives_a_round_trip_through_the_tab() {
+        // 7E2 with software flow control: every one of the four different from the default, so a
+        // field that silently fell back to 8N1 fails here instead of on somebody's console.
+        let existing = ProtocolConfig::Serial(SerialConfig {
+            device: "COM7".to_owned(),
+            baud: 9600,
+            data_bits: 7,
+            parity: bestterm_core_model::Parity::Even,
+            stop_bits: 2,
+            flow_control: bestterm_core_model::FlowControl::Software,
+        });
+
+        let mut dialog = SessionDialog::default();
+        dialog.open_for(&existing);
+        assert_eq!(DATA_BITS[dialog.fields.serial_data_bits], "7");
+        assert_eq!(PARITIES[dialog.fields.serial_parity], "Even");
+        assert_eq!(STOP_BITS[dialog.fields.serial_stop_bits], "2");
+        assert_eq!(dialog.fields.serial_flow_control, 1);
+
+        let mut target = existing.clone();
+        match dialog.build() {
+            DialogOutcome::Accepted(produced) => SessionDialog::merge_into(*produced, &mut target),
+            other => panic!("the dialog refused a complete serial session: {other:?}"),
+        }
+        assert_eq!(
+            target, existing,
+            "an untouched round trip has to change nothing"
+        );
+
+        // And an edit lands: back to 8N1, which is the direction somebody takes to fix a console
+        // that was configured wrongly in the first place.
+        dialog.fields.serial_data_bits = 3;
+        dialog.fields.serial_parity = 0;
+        dialog.fields.serial_stop_bits = 0;
+        dialog.fields.serial_flow_control = 0;
+        match dialog.build() {
+            DialogOutcome::Accepted(produced) => SessionDialog::merge_into(*produced, &mut target),
+            other => panic!("the dialog refused a complete serial session: {other:?}"),
+        }
+        let ProtocolConfig::Serial(serial) = target else {
+            panic!("a serial session stopped being one")
+        };
+        assert_eq!(serial.data_bits, 8);
+        assert_eq!(serial.parity, bestterm_core_model::Parity::None);
+        assert_eq!(serial.stop_bits, 1);
+        assert_eq!(serial.flow_control, bestterm_core_model::FlowControl::None);
+    }
+
+    #[test]
+    fn a_hand_edited_session_file_cannot_index_past_a_list() {
+        // The model holds plain numbers and the file is somebody's to edit, so 9 data bits and 5
+        // stop bits are both representable. Showing the default beats panicking on an index.
+        let nonsense = ProtocolConfig::Serial(SerialConfig {
+            device: "COM1".to_owned(),
+            baud: 9600,
+            data_bits: 9,
+            stop_bits: 5,
+            ..SerialConfig::default()
+        });
+        let mut dialog = SessionDialog::default();
+        dialog.open_for(&nonsense);
+        assert_eq!(
+            DATA_BITS[dialog.fields.serial_data_bits], "8",
+            "an impossible framing shows as the default"
+        );
+        assert_eq!(STOP_BITS[dialog.fields.serial_stop_bits], "1");
     }
 
     #[test]
