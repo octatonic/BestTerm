@@ -57,6 +57,9 @@ fn main() -> eframe::Result {
 /// Only the libraries that are loaded by name at run time, and only for the display server that is
 /// actually going to be used: on a Wayland session the X11 library is never opened, and demanding it
 /// there would refuse to start a program that would have worked.
+///
+/// Note for anybody editing this on Windows: nothing below is compiled there, so `cargo clippy`
+/// locally will not lint it. The `unsafe_code` denial in the workspace was found by CI, not here.
 #[cfg(target_os = "linux")]
 fn check_shared_libraries() -> Result<(), String> {
     // Wayland wins when both are set, which is what `winit` does: a session with `WAYLAND_DISPLAY`
@@ -71,9 +74,19 @@ fn check_shared_libraries() -> Result<(), String> {
 
     let mut missing: Vec<(&str, &str)> = Vec::new();
     for (library, package) in needed {
-        // SAFETY: opening a library runs its initialisers, which for these is nothing but setting up
-        // tables. They are the same libraries the windowing layer is about to open by the same names;
-        // doing it here first only moves the failure somewhere it can be explained.
+        // The workspace denies `unsafe_code`, so this is the argument for the one exception. Loading
+        // a library is unsafe because it runs that library's initialisers, and nothing can promise
+        // what arbitrary code does. These two are not arbitrary: they are the same libraries, opened
+        // by the same names, that the windowing layer is about to open a moment later -- so the code
+        // runs either way, and doing it here first only moves the failure somewhere it can be
+        // explained instead of aborting with a core dump.
+        //
+        // The handle is dropped immediately. `winit` opens its own; two `dlopen` calls for one
+        // library return the same handle with a reference count, and dropping ours leaves it loaded.
+        #[allow(
+            unsafe_code,
+            reason = "dlopen of a library the windowing layer opens regardless, to name it before it aborts"
+        )]
         let opened = unsafe { libloading::Library::new(library) };
         if opened.is_err() {
             missing.push((library, package));
