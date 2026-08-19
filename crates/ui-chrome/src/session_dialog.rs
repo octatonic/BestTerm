@@ -297,7 +297,7 @@ pub struct SessionFields {
     pub highlighting: usize,
 
     // ---- Network settings, measured --------------------------------------------------------
-    /// Which proxy protocol to use, as an index into [`ProxyKind::ALL`].
+    /// Which proxy protocol to use, as an index into [`bestterm_core_model::ProxyKind::ALL`].
     pub proxy_type: usize,
     /// The proxy's address.
     pub proxy_host: String,
