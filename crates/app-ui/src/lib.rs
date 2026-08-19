@@ -82,6 +82,10 @@ pub struct BestTermApp {
     opened_first_shell: bool,
     /// What the command line asked for, acted on once the window exists.
     startup: Startup,
+    /// Frames left to paint before closing, when `--self-check` asked for a count.
+    self_check: Option<u32>,
+    /// How many have been painted, for the line it prints on the way out.
+    self_check_painted: u32,
     /// Where configuration lives, or `None` when no home directory could be found.
     ///
     /// Absent is survivable: the application runs and forgets, which is better than refusing to start
@@ -159,6 +163,17 @@ pub struct Startup {
     pub connect: Option<String>,
     /// A `.mxtsessions` file to import into the session tree.
     pub import: Option<std::path::PathBuf>,
+    /// Paint this many frames, then close.
+    ///
+    /// `--self-check`. There for a reason that is not testing: on Linux the difference between a
+    /// working install and one that cannot open a window is a graphics driver, and the failure
+    /// looks like a program that does nothing when double-clicked. This turns that into a command
+    /// with an exit status and a line of output.
+    ///
+    /// CI uses it as the only check that the interface starts at all on a platform none of us runs
+    /// day to day. Every test above it draws into an off-screen context, which proves the layout
+    /// and proves nothing about whether a window and a renderer can be had.
+    pub self_check: Option<u32>,
 }
 
 impl BestTermApp {
@@ -212,6 +227,8 @@ impl BestTermApp {
             palette: Palette::xterm(),
             theme_installed: false,
             opened_first_shell: false,
+            self_check: startup.self_check,
+            self_check_painted: 0,
             startup,
             store,
             tree,
@@ -2022,6 +2039,35 @@ fn handle_input(tab: &mut TerminalTab, events: &[egui::Event], scroll_y: f32, ce
 impl eframe::App for BestTermApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+
+        // Counted before anything is drawn, and closed after the count runs out, so the frames
+        // that are counted are frames that went through the whole of `ui` -- including the
+        // terminal, which is the part most likely to fail on a machine whose renderer cannot do
+        // what it claims.
+        if let Some(left) = self.self_check.as_mut() {
+            if *left == 0 {
+                // `raw.screen_rect` rather than a method, as in `centre_of`: egui 0.36 has none.
+                let screen = ctx
+                    .input(|input| input.raw.screen_rect)
+                    .unwrap_or(egui::Rect::ZERO);
+                println!(
+                    "self-check: painted {} frames at {:.0}x{:.0}; renderer and window are usable",
+                    self.self_check_painted,
+                    screen.width(),
+                    screen.height()
+                );
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                // Cleared, or this runs again: closing is a request, and egui draws at least one
+                // more frame before the window goes away -- which printed the result twice.
+                self.self_check = None;
+                return;
+            }
+            *left -= 1;
+            self.self_check_painted += 1;
+            // Frames only arrive on demand, and a self-check that waited for input would wait for
+            // ever on a machine with nobody at it.
+            ctx.request_repaint();
+        }
 
         if !self.theme_installed {
             apply_theme(&ctx, &self.theme);

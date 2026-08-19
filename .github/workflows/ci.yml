@@ -39,7 +39,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libwayland-dev libssl-dev
+            libxkbcommon-dev libwayland-dev libssl-dev \
+            xvfb mesa-vulkan-drivers libgl1-mesa-dri
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -148,6 +149,29 @@ jobs:
 
       - name: Build (release, RDP helper)
         run: cargo build --manifest-path helpers/rdp/Cargo.toml --workspace --release
+
+      # The only check that the interface starts at all. Every other test draws into an
+      # off-screen context, which proves the layout and proves nothing about whether a window and
+      # a renderer can be had -- and until this step, nobody had opened the window on Linux.
+      #
+      # Software rendering on purpose: a CI runner has no GPU, and lavapipe is what a machine
+      # without one has. If the interface needs hardware to start, that is a bug in it.
+      #
+      # `BESTTERM_CONFIG_DIR` keeps it away from the runner's home directory, so the check cannot
+      # be affected by, or leave behind, a session tree.
+      - name: The interface starts and paints (Linux)
+        if: runner.os == 'Linux'
+        env:
+          WGPU_BACKEND: vulkan
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          BESTTERM_CONFIG_DIR: ${{ runner.temp }}/bestterm-self-check
+        run: |
+          set -o pipefail
+          # A timeout because a window that never opens hangs rather than failing, and a hung job
+          # is six hours of a runner instead of a red cross.
+          timeout 120 xvfb-run -a --server-args='-screen 0 1280x800x24' \
+            ./target/release/bestterm --self-check | tee self-check.log
+          grep -q 'renderer and window are usable' self-check.log
 
       # Both binaries, in one artifact and at its top level. `helper_path` looks for the helper
       # beside the running executable and deliberately never on PATH, so an artifact carrying only

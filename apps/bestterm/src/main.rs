@@ -35,15 +35,21 @@ fn main() -> eframe::Result {
 
 /// Read the command line.
 ///
-/// One positional argument, a session to open: `bestterm admin@srv.int:2222`, and one option,
-/// `--import <file>`, which reads a `.mxtsessions` export into the session tree. Anything unrecognised
-/// is reported and ignored rather than refused, because a terminal that will not start because of a
-/// typo in its arguments is worse than one that starts without the session.
+/// One positional argument, a session to open: `bestterm admin@srv.int:2222`, and two options:
+/// `--import <file>`, which reads a `.mxtsessions` export into the session tree, and `--self-check`,
+/// which opens the window, paints a few frames and exits. Anything unrecognised is reported and
+/// ignored rather than refused, because a terminal that will not start because of a typo in its
+/// arguments is worse than one that starts without the session.
 fn parse_arguments() -> Startup {
     let mut startup = Startup::default();
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
-        if argument == "--import" {
+        if argument == "--self-check" {
+            // Enough frames that the first one -- which opens a shell, measures the font and builds
+            // the theme -- is not the only one counted. A renderer that fails does so on the first
+            // draw; a layout that panics on a second pass needs a second pass to show it.
+            startup.self_check = Some(5);
+        } else if argument == "--import" {
             match arguments.next() {
                 Some(path) => startup.import = Some(std::path::PathBuf::from(path)),
                 None => tracing::warn!("--import needs a path"),
