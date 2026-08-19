@@ -239,6 +239,10 @@ pub struct SessionFields {
     pub port: String,
     /// Windows domain, for RDP.
     pub domain: String,
+    /// Share the local clipboard with an RDP session.
+    pub rdp_clipboard: bool,
+    /// Span an RDP session across every local monitor.
+    pub rdp_multi_monitor: bool,
     /// Serial device.
     pub serial_port: String,
     /// Serial speed in bits per second.
@@ -335,6 +339,10 @@ impl Default for SessionFields {
             user: String::new(),
             port: String::new(),
             domain: String::new(),
+            // The reference has clipboard sharing on by default, and so does every other client
+            // people arrive from. Multi-monitor is off, because spanning is a deliberate choice.
+            rdp_clipboard: true,
+            rdp_multi_monitor: false,
             serial_port: String::new(),
             baud: String::new(),
             path: String::new(),
@@ -506,6 +514,8 @@ impl SessionDialog {
                 self.fields.port = rdp.port.to_string();
                 self.fields.user = rdp.user.clone().unwrap_or_default();
                 self.fields.domain = rdp.domain.clone().unwrap_or_default();
+                self.fields.rdp_clipboard = rdp.clipboard;
+                self.fields.rdp_multi_monitor = rdp.multi_monitor;
             }
             ProtocolConfig::Vnc(vnc) => {
                 self.protocol = DialogProtocol::Vnc;
@@ -570,6 +580,10 @@ impl SessionDialog {
                 old.port = new.port;
                 old.user = new.user;
                 old.domain = new.domain;
+                // Copied, now that the tab can set them. Left out while it could not, which was
+                // right then and would silently reset an imported session now.
+                old.clipboard = new.clipboard;
+                old.multi_monitor = new.multi_monitor;
             }
             (ProtocolConfig::Vnc(new), ProtocolConfig::Vnc(old)) => {
                 old.host = new.host;
@@ -773,6 +787,8 @@ impl SessionDialog {
                     user: optional_user,
                     domain: (!self.fields.domain.trim().is_empty())
                         .then(|| self.fields.domain.trim().to_owned()),
+                    clipboard: self.fields.rdp_clipboard,
+                    multi_monitor: self.fields.rdp_multi_monitor,
                     ..RdpConfig::default()
                 })))
             }
@@ -1021,6 +1037,22 @@ fn basic_fields(ui: &mut Ui, dialog: &mut SessionDialog) {
             ui.label("Username");
             ui.text_edit_singleline(&mut fields.user);
         }
+        DialogProtocol::Rdp => {
+            ui.label("Remote host *");
+            ui.text_edit_singleline(&mut fields.host);
+            ui.add_space(12.0);
+            ui.label("Username");
+            ui.text_edit_singleline(&mut fields.user);
+            ui.add_space(12.0);
+            // The one field a domain account cannot connect without, and it had nowhere to be
+            // typed: it was loaded from a session and written back, so an imported session kept
+            // its domain and no one could change it.
+            ui.label("Domain");
+            ui.add(egui::TextEdit::singleline(&mut fields.domain).desired_width(90.0));
+            ui.add_space(12.0);
+            ui.label("Port");
+            ui.add(egui::TextEdit::singleline(&mut fields.port).desired_width(52.0));
+        }
         DialogProtocol::Vnc => {
             ui.label("Remote hostname or IP address *");
             ui.text_edit_singleline(&mut fields.host);
@@ -1103,6 +1135,10 @@ fn secondary_tab_row(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialo
 /// Only SSH is measured. The others get a line saying so rather than SSH's fields under another
 /// protocol's name, which would be a form that lies about what it sets.
 fn advanced_tab(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
+    if dialog.protocol == DialogProtocol::Rdp {
+        rdp_advanced_tab(ui, theme, &mut dialog.fields);
+        return;
+    }
     if dialog.protocol != DialogProtocol::Ssh {
         // What the reference itself shows in an advanced tab it has nothing to put in: the protocol's
         // name and its icon, filling the space. Measured from the RDP tab, which looks exactly like
@@ -1204,6 +1240,36 @@ fn advanced_tab(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
 }
 
 /// The terminal tab.
+/// Advanced RDP settings.
+///
+/// Not measured against the reference, which has a much larger tab -- display resolution, sound,
+/// device redirection, gateways, a program to start. What is here is what the session model
+/// carries, so every control changes something that is saved. The reference's remaining fields
+/// arrive when the helper can act on them; a checkbox for a feature that does not exist would be
+/// the fake tab this replaces.
+fn rdp_advanced_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
+    ui.checkbox(
+        &mut fields.rdp_clipboard,
+        "Share the local clipboard with the remote session",
+    );
+    ui.add_space(6.0);
+    ui.checkbox(
+        &mut fields.rdp_multi_monitor,
+        "Span the session across all local monitors",
+    );
+
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(
+            "Both are saved with the session and neither is acted on yet: the helper has no \
+              clipboard channel and opens one monitor's worth of desktop. The domain is on the \
+              first row, and it is used.",
+        )
+        .small()
+        .color(theme.text_dim),
+    );
+}
+
 fn terminal_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
     ui.horizontal(|ui| {
         for label in ["Font settings", "Color settings", "Expert settings"] {
@@ -1828,6 +1894,52 @@ mod tests {
         assert_eq!(starting_directory("   "), None);
         assert_eq!(starting_directory(""), None);
         assert_eq!(starting_directory("Z:/no/such/place/key.ppk"), None);
+    }
+
+    #[test]
+    fn an_rdp_session_keeps_the_settings_only_it_has() {
+        // Three fields that the model carried and the dialog could not touch. `domain` was loaded
+        // and written back with no widget anywhere, so an imported domain account could never be
+        // corrected; `clipboard` and `multi_monitor` were left out of the merge, which was right
+        // while nothing could set them and would quietly reset a session once something could.
+        //
+        // Checked both ways round, because each direction fails on its own: produce-only would
+        // write defaults over a stored session, and merge-only would drop what was just typed.
+        let existing = ProtocolConfig::Rdp(RdpConfig {
+            host: "host.invalid".to_owned(),
+            port: 3389,
+            user: Some("someone".to_owned()),
+            domain: Some("CORP".to_owned()),
+            clipboard: false,
+            multi_monitor: true,
+            ..RdpConfig::default()
+        });
+
+        let mut dialog = SessionDialog::default();
+        dialog.open_for(&existing);
+        assert_eq!(dialog.fields.domain, "CORP", "the domain reaches the field");
+        assert!(
+            !dialog.fields.rdp_clipboard,
+            "and so does a cleared checkbox"
+        );
+        assert!(dialog.fields.rdp_multi_monitor);
+
+        // Edited the way somebody would: a different domain, clipboard back on.
+        dialog.fields.domain = "OTHER".to_owned();
+        dialog.fields.rdp_clipboard = true;
+
+        let mut target = existing.clone();
+        match dialog.build() {
+            DialogOutcome::Accepted(produced) => SessionDialog::merge_into(*produced, &mut target),
+            other => panic!("the dialog refused a complete RDP session: {other:?}"),
+        }
+
+        let ProtocolConfig::Rdp(rdp) = target else {
+            panic!("an RDP session stopped being one")
+        };
+        assert_eq!(rdp.domain.as_deref(), Some("OTHER"), "the edit lands");
+        assert!(rdp.clipboard, "and so does the checkbox");
+        assert!(rdp.multi_monitor, "what was not edited is kept");
     }
 
     #[test]
