@@ -253,6 +253,100 @@ pub struct SshConfig {
     pub forwards: Vec<PortForward>,
     /// Command to run instead of a login shell.
     pub command: Option<String>,
+    /// Keep the session open after `command` finishes.
+    ///
+    /// Without it a session that ran one command closes the moment it ends, taking its output
+    /// with it — which is exactly wrong when the command was the thing you wanted to read.
+    #[serde(default)]
+    pub keep_open_after_command: bool,
+    /// Ask for the connection to be compressed.
+    ///
+    /// Worth having on a slow link and worth not having on a fast one, where it costs processor
+    /// time to save bandwidth nobody was short of.
+    #[serde(default)]
+    pub compression: bool,
+    /// A proxy to reach the server through.
+    ///
+    /// Distinct from a jump host, which is an SSH connection carrying another; this is a proxy
+    /// protocol in front of the socket. The reference calls its own version experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<Proxy>,
+}
+
+/// How to reach a server through something else.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Proxy {
+    /// Which protocol the proxy speaks.
+    pub kind: ProxyKind,
+    /// The proxy's address.
+    pub host: String,
+    /// And its port.
+    pub port: u16,
+    /// The login to give it, when it wants one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
+}
+
+/// The proxy protocols the reference offers.
+///
+/// Recorded in full because the list is measured, and a session configured against one this build
+/// cannot speak should keep its setting rather than have it silently rewritten to `None`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProxyKind {
+    /// Straight to the server.
+    #[default]
+    None,
+    /// SOCKS4.
+    Socks4,
+    /// SOCKS5.
+    Socks5,
+    /// HTTP `CONNECT`.
+    Http,
+    /// A telnet proxy.
+    Telnet,
+    /// A local command that provides the socket.
+    Local,
+    /// An existing SSH forward.
+    SshForwarding,
+    /// An `ssh` command that provides the socket.
+    SshCommand,
+}
+
+impl ProxyKind {
+    /// Every kind, in the order the reference lists them.
+    pub const ALL: [Self; 8] = [
+        Self::None,
+        Self::Socks4,
+        Self::Socks5,
+        Self::Http,
+        Self::Telnet,
+        Self::Local,
+        Self::SshForwarding,
+        Self::SshCommand,
+    ];
+
+    /// The label the reference uses.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Socks4 => "Socks4",
+            Self::Socks5 => "Socks5",
+            Self::Http => "Http",
+            Self::Telnet => "Telnet",
+            Self::Local => "Local",
+            Self::SshForwarding => "SSH forwarding",
+            Self::SshCommand => "SSH command",
+        }
+    }
+
+    /// Whether `proto-ssh` can actually route through this one yet.
+    ///
+    /// Only SOCKS5 and HTTP, and only once the dialing code exists. The rest are stored so a
+    /// session keeps what it was configured with; the interface says which are inert.
+    pub fn is_implemented(self) -> bool {
+        false
+    }
 }
 
 impl Default for SshConfig {
@@ -263,6 +357,9 @@ impl Default for SshConfig {
             user: None,
             auth: SshAuth::default(),
             jump_hosts: Vec::new(),
+            keep_open_after_command: false,
+            compression: false,
+            proxy: None,
             forwards: Vec::new(),
             command: None,
         }

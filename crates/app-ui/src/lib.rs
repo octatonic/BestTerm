@@ -1384,7 +1384,8 @@ impl BestTermApp {
 
     /// Draw the saved session tree, returning a session somebody asked to open.
     fn session_tree(&mut self, ui: &mut egui::Ui) -> Option<(NodeId, SessionAction)> {
-        let roots: Vec<NodeId> = self.tree.roots().to_vec();
+        // Folders first: see `SessionTree::ordered_roots`.
+        let roots: Vec<NodeId> = self.tree.ordered_roots();
         if roots.is_empty() {
             ui.label(
                 egui::RichText::new(
@@ -1415,7 +1416,7 @@ impl BestTermApp {
         let name = node.name.clone();
 
         if node.kind.is_folder() {
-            let children: Vec<NodeId> = node.children().to_vec();
+            let children: Vec<NodeId> = self.tree.ordered_children(node.children());
             // egui's own collapsing header, because it paints its triangle with the painter rather
             // than with a glyph. The first version used `▸` and `▾`, which the bundled font does not
             // have, so every folder in the tree was marked with an empty box.
@@ -1487,7 +1488,16 @@ impl BestTermApp {
 
             SessionAction::Edit => {
                 if let Some(config) = config {
+                    let (settings, comment) = match self.tree.get(id) {
+                        Some(node) => (node.settings.clone(), node.comment.clone()),
+                        None => return,
+                    };
                     self.dialog.open_for(&config);
+                    self.dialog.load_settings(&settings);
+                    // The name the tree shows, so the Bookmark tab opens on what it is called rather
+                    // than on an empty field that would rename it to its address on the way out.
+                    self.dialog.fields.session_name = name.clone();
+                    self.dialog.fields.comments = comment.unwrap_or_default();
                     // What makes it an edit rather than a new session: accepting merges back onto
                     // this node instead of opening something.
                     self.editing = Some(id);
@@ -1530,6 +1540,16 @@ impl BestTermApp {
         let mut updated = config.as_ref().clone();
         SessionDialog::merge_into(produced, &mut updated);
         **config = updated;
+
+        // The Bookmark tab's name and comment, and the settings the other tabs collect. Merged
+        // onto what the node already has rather than replacing it: a node carries settings this
+        // dialog has no field for -- a font, a palette, a tab colour that came in with the import --
+        // and building a fresh set from the form would throw them away.
+        if let Some(renamed) = self.dialog.session_name() {
+            node.name = renamed;
+        }
+        node.comment = self.dialog.comment();
+        self.dialog.apply_settings(&mut node.settings);
         let name = node.name.clone();
 
         self.save_tree();
@@ -1953,21 +1973,37 @@ impl eframe::App for BestTermApp {
                 status_bar(ui, &theme, &chrome.status, &chrome, &mut actions)
             });
 
-        // The dialog covers everything below the quick-connect row -- the sidebar included, which is
-        // where the reference puts it. Drawn here rather than inside the central panel because at this
-        // point the remaining rectangle is still the full width of the window; adding the left panels
-        // first would confine it to the session area and leave its fifteen tabs wrapping onto two rows.
+        // A window, not a panel over everything. The first version spanned the full width of the
+        // application and covered the tree it was editing a session from -- and on a wide screen it
+        // stretched four fields across two thousand pixels. The reference uses an ordinary window,
+        // about 886 by 589, which can be moved off whatever it is hiding.
         if self.dialog.open {
-            Frame::NONE
-                .fill(theme.chrome_bg)
-                .inner_margin(egui::Margin::same(8))
-                .show(ui, |ui| session_dialog(ui, &theme, &mut self.dialog));
-
-            if let Some(outcome) = self.dialog.take_outcome() {
-                self.apply_dialog_outcome(outcome, &ctx);
+            let mut open = true;
+            egui::Window::new("Session settings")
+                .open(&mut open)
+                .resizable(true)
+                .collapsible(false)
+                .default_width(886.0)
+                .default_height(589.0)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(&ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        session_dialog(ui, &theme, &mut self.dialog);
+                    });
+                });
+            if !open {
+                // The window's own cross, which has to mean the same thing as Cancel.
+                self.dialog.open = false;
+                self.editing = None;
             }
-            self.apply_actions(actions, &ctx);
-            return;
+        }
+
+        // Outside the window, because acting on the outcome borrows the whole application and the
+        // dialog is drawing part of it. Dropped when the panel became a window and briefly left the
+        // dialog unable to do anything at all -- caught by the compiler, which noticed that nothing
+        // called it any more.
+        if let Some(outcome) = self.dialog.take_outcome() {
+            self.apply_dialog_outcome(outcome, &ctx);
         }
 
         // The edge strip is always visible, even when the panel beside it is collapsed.

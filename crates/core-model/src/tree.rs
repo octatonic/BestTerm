@@ -92,6 +92,38 @@ pub struct Node {
     children: Vec<NodeId>,
 }
 
+impl SessionTree {
+    /// A folder's children with the folders first.
+    ///
+    /// The order children arrive in is the order they were added, which for an import is the order the
+    /// file listed them -- so folders end up wherever they happened to fall, and in a tree of a hundred
+    /// and forty sessions they fall at the bottom. Containers before contents is what every file
+    /// manager does and what the reference does, and it is what somebody scanning the tree expects.
+    ///
+    /// Stable within each group: two folders keep their relative order, and so do two sessions. Sorting
+    /// them alphabetically as well would override an order somebody arranged deliberately.
+    pub fn ordered_children(&self, children: &[NodeId]) -> Vec<NodeId> {
+        let mut folders = Vec::new();
+        let mut sessions = Vec::new();
+        for id in children {
+            match self.get(*id) {
+                Some(node) if node.kind.is_folder() => folders.push(*id),
+                Some(_) => sessions.push(*id),
+                // A child with no node is a tree that disagrees with itself. Kept in the list rather
+                // than dropped, so whatever is wrong stays visible instead of quietly shrinking it.
+                None => sessions.push(*id),
+            }
+        }
+        folders.extend(sessions);
+        folders
+    }
+
+    /// The top level, with the folders first.
+    pub fn ordered_roots(&self) -> Vec<NodeId> {
+        self.ordered_children(self.roots())
+    }
+}
+
 impl Node {
     /// Ordered children.
     pub fn children(&self) -> &[NodeId] {

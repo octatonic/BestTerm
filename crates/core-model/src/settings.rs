@@ -48,6 +48,24 @@ pub struct SettingsOverride {
     /// Reconnect automatically after an unexpected disconnect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_reconnect: Option<bool>,
+    /// What to tell the remote end this terminal is, as `TERM`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_type: Option<String>,
+    /// Where a transcript goes, when `log_session` is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
+    /// Whether Backspace sends `^H` rather than delete.
+    ///
+    /// Which one is right depends entirely on the far end, which is why it is a setting and not a
+    /// decision: the same key has to do different things on different hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backspace_sends_ctrl_h: Option<bool>,
+    /// Keep the tab's title as the session's name rather than letting the program change it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_terminal_title: Option<bool>,
+    /// Say so in the terminal when a session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconnection_message: Option<bool>,
 }
 
 impl SettingsOverride {

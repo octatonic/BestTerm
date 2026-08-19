@@ -51,7 +51,8 @@ pub use doc::{DocError, NodeDoc, TreeDoc};
 pub use id::NodeId;
 pub use protocol::{
     CredentialRef, FlowControl, ForwardKind, LocalShellConfig, Parity, PortForward, Protocol,
-    ProtocolConfig, RdpConfig, SerialConfig, SshAuth, SshConfig, TelnetConfig, VncConfig,
+    ProtocolConfig, Proxy, ProxyKind, RdpConfig, SerialConfig, SshAuth, SshConfig, TelnetConfig,
+    VncConfig,
 };
 pub use settings::{ResolvedSettings, SettingsOverride};
 pub use tree::{ModelError, ModelResult, Node, NodeKind, SessionTree};

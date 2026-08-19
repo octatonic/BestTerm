@@ -125,3 +125,66 @@ the "dozens of fields per protocol" live, and it needs the same treatment as the
 control type, default, validation, and the `.mxtsessions` key each maps to. The importer already knows
 some of those keys — see `crates/importers/src/mxtsessions.rs` — so the mapping can be built from both
 ends and checked in the middle.
+
+## The SSH secondary tabs, measured
+
+From screenshots of MobaXterm Professional 26.4.0.5512, tab by tab. Until this they carried a line
+saying they held dozens of fields each and had not been measured, which was true and is no longer.
+
+Two of these fields are not parity work at all: `Session name` on Bookmark and `Use private key` on
+Advanced are the only way to do two things the application could not do — name a saved session, and
+point one at a key file.
+
+### Advanced SSH settings
+
+| Control | Kind | State |
+|---|---|---|
+| X11-Forwarding | checkbox, on | saved to `SettingsOverride` |
+| Compression | checkbox, on | saved to `SshConfig` |
+| Remote environment | dropdown, `Interactive shell` | saved, not acted on |
+| Execute command | text | saved to `SshConfig::command` |
+| Do not exit after command ends | checkbox, off | saved |
+| SSH-browser type | dropdown, `SFTP protocol` | saved, not acted on — there is no browser yet |
+| Try to follow SSH path in browser | checkbox, off | saved, not acted on |
+| Use private key + path + file button | checkbox, text, button | **saved and used**; the button has no picker |
+| Expert SSH settings | button | absent, and its contents unmeasured |
+| Execute macro at session start | dropdown, `<none>` | saved; there are no macros to list until phase 7 |
+
+### Terminal settings
+
+| Control | Kind | State |
+|---|---|---|
+| Font / Color / Expert settings | three buttons | drawn; their dialogs are unmeasured |
+| Backspace sends ^H | checkbox, on | saved |
+| Use Windows PATH | checkbox, on | saved |
+| Terminal type | dropdown, `xterm` | saved and sent as `TERM` |
+| Log terminal output to | checkbox + path | saved |
+| Paste delay | dropdown, `Auto` | saved, not acted on |
+| Syntax highlighting + Customize | dropdown + button | saved, not acted on |
+
+### Network settings
+
+| Control | Kind | State |
+|---|---|---|
+| SSH gateway (jump host) | button | jump hosts are in the model with no editor |
+| Proxy type | dropdown: None, Socks4, Socks5, Http, Telnet, Local, SSH forwarding, SSH command | saved; nothing routes through one yet |
+| Host / Login / Port | text, text, text (1080) | saved |
+
+The reference labels its own proxy support experimental. Ours says outright that a proxy is stored
+and not yet used, because a setting that looks applied and is not is worse than one that says so.
+
+### Bookmark settings
+
+| Control | Kind | State |
+|---|---|---|
+| Session name | text | **saved**; blank falls back to the address |
+| Lock terminal title | checkbox, on | saved |
+| Session Icon | button | icons are imported; there is no chooser |
+| Start session in | dropdown, `Normal tab` | saved; splits and separate windows do not exist yet |
+| Display reconnection message at session end | checkbox, on | saved |
+| Customize tab color | checkbox, off | saved |
+| Comments | text | saved to the node's comment |
+| Create a desktop shortcut to this session | button | absent |
+
+The advanced tabs of every other protocol are still unmeasured, and show what the reference shows in
+the same situation: the protocol's name and its icon filling the space.

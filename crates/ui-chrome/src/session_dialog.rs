@@ -189,18 +189,31 @@ impl DialogProtocol {
 /// The tabs below the basic settings, other than the advanced one named after the protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecondaryTab {
+    /// The one named after the protocol.
+    ///
+    /// In the enum even though `secondary_tabs` does not list it, because selection is one value
+    /// and a tab that cannot be selected is the state this row was in before: four labels that
+    /// could be clicked and did nothing.
+    Advanced,
     /// Character-stream settings.
     Terminal,
     /// Proxy and jump settings.
     Network,
+    /// The session's name, its icon, and where it opens.
+    Bookmark,
 }
 
 impl SecondaryTab {
     /// The tab's label.
+    ///
+    /// `Advanced` has none of its own: the reference names it after the protocol, so the caller
+    /// composes it.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Advanced => "Advanced settings",
             Self::Terminal => "Terminal settings",
             Self::Network => "Network settings",
+            Self::Bookmark => "★ Bookmark settings",
         }
     }
 }
@@ -216,7 +229,7 @@ pub const SHELL_CHOICES: &[&str] = &["Cmd", "Windows PowerShell", "PowerShell", 
 ///
 /// A superset across protocols rather than one struct each, so that switching tabs keeps what was
 /// typed — which is what the reference does.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SessionFields {
     /// Host or address.
     pub host: String,
@@ -244,7 +257,158 @@ pub struct SessionFields {
     pub startup_directory: String,
     /// Whether the Xdmcp tab is set to a named server rather than any.
     pub xdmcp_specific: bool,
+
+    // ---- Advanced SSH settings, measured ----------------------------------------------------
+    /// Ask the server for X11 forwarding.
+    pub x11_forwarding: bool,
+    /// Ask for the connection to be compressed.
+    pub compression: bool,
+    /// What to run instead of a login shell.
+    pub remote_environment: usize,
+    /// A command to run instead of a shell.
+    pub execute_command: String,
+    /// Keep the session open once that command ends.
+    pub keep_open_after_command: bool,
+    /// Which protocol the file browser uses, as an index into [`BROWSER_TYPES`].
+    pub browser_type: usize,
+    /// Make the browser follow the shell's working directory.
+    pub follow_ssh_path: bool,
+    /// Authenticate with a key file rather than the agent.
+    pub use_private_key: bool,
+    /// Where that key is.
+    pub private_key: String,
+    /// A macro to run when the session opens, as an index into [`MACRO_CHOICES`].
+    pub macro_at_start: usize,
+
+    // ---- Terminal settings, measured -------------------------------------------------------
+    /// Whether Backspace sends `^H`.
+    pub backspace_sends_ctrl_h: bool,
+    /// Put the Windows `PATH` into the session's environment.
+    pub use_windows_path: bool,
+    /// What to tell the far end this terminal is, as an index into [`TERMINAL_TYPES`].
+    pub terminal_type: usize,
+    /// Write a transcript to disk.
+    pub log_output: bool,
+    /// And where.
+    pub log_path: String,
+    /// How long to wait between pasted lines, as an index into [`PASTE_DELAYS`].
+    pub paste_delay: usize,
+    /// Which highlighting to apply, as an index into [`HIGHLIGHTING`].
+    pub highlighting: usize,
+
+    // ---- Network settings, measured --------------------------------------------------------
+    /// Which proxy protocol to use, as an index into [`ProxyKind::ALL`].
+    pub proxy_type: usize,
+    /// The proxy's address.
+    pub proxy_host: String,
+    /// The login to give it.
+    pub proxy_login: String,
+    /// And its port, as typed.
+    pub proxy_port: String,
+
+    // ---- Bookmark settings, measured -------------------------------------------------------
+    /// What the session is called in the tree.
+    ///
+    /// The field that made editing possible: without it a saved session could be renamed only
+    /// through the tree's own menu, and the dialog that claimed to edit it could not touch its
+    /// name.
+    pub session_name: String,
+    /// Keep the tab's title as the name rather than letting the program change it.
+    pub lock_terminal_title: bool,
+    /// Where the session opens, as an index into [`START_IN`].
+    pub start_in: usize,
+    /// Say so in the terminal when the session ends.
+    pub reconnection_message: bool,
+    /// Give the tab a colour of its own.
+    pub customize_tab_color: bool,
+    /// A note.
+    pub comments: String,
 }
+
+impl Default for SessionFields {
+    /// The reference's own defaults, so a fresh dialog agrees with it rather than starting from
+    /// every box unticked: X11 forwarding and compression on, an interactive shell, the SFTP
+    /// browser, `xterm`, Backspace sending `^H`, and the reconnection message shown.
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            user: String::new(),
+            port: String::new(),
+            domain: String::new(),
+            serial_port: String::new(),
+            baud: String::new(),
+            path: String::new(),
+            url: String::new(),
+            key_id: String::new(),
+            distribution: String::new(),
+            shell_choice: 0,
+            startup_directory: String::new(),
+            xdmcp_specific: false,
+            x11_forwarding: true,
+            compression: true,
+            remote_environment: 0,
+            execute_command: String::new(),
+            keep_open_after_command: false,
+            browser_type: 0,
+            follow_ssh_path: false,
+            use_private_key: false,
+            private_key: String::new(),
+            macro_at_start: 0,
+            backspace_sends_ctrl_h: true,
+            use_windows_path: true,
+            terminal_type: 0,
+            log_output: false,
+            log_path: String::new(),
+            paste_delay: 0,
+            highlighting: 0,
+            proxy_type: 0,
+            proxy_host: String::new(),
+            proxy_login: String::new(),
+            proxy_port: "1080".to_string(),
+            session_name: String::new(),
+            lock_terminal_title: true,
+            start_in: 0,
+            reconnection_message: true,
+            customize_tab_color: false,
+            comments: String::new(),
+        }
+    }
+}
+
+/// What the Advanced tab's `Remote environment` offers.
+///
+/// Only the first is honoured: the rest ask the server for a session shape this build does not
+/// arrange yet, and a value stored is a value kept for when it does.
+pub const REMOTE_ENVIRONMENTS: &[&str] = &[
+    "Interactive shell",
+    "LXDE desktop",
+    "Xfce desktop",
+    "Mate desktop",
+    "Enlightenment desktop",
+    "2D OpenGL desktop",
+    "3D OpenGL desktop",
+];
+
+/// What the Advanced tab's `SSH-browser type` offers.
+pub const BROWSER_TYPES: &[&str] = &["SFTP protocol", "SCP protocol", "None"];
+
+/// What the Advanced tab's `Execute macro at session start` offers.
+///
+/// One entry, because there are no macros to list: recording them is phase 7. The list exists so
+/// the control is the right shape when they arrive.
+pub const MACRO_CHOICES: &[&str] = &["<none>"];
+
+/// What the Terminal tab's `Terminal type` offers.
+pub const TERMINAL_TYPES: &[&str] = &["xterm", "xterm-256color", "vt100", "linux", "ansi"];
+
+/// What the Terminal tab's `Paste delay` offers.
+pub const PASTE_DELAYS: &[&str] = &["Auto", "None", "10ms", "25ms", "50ms", "100ms"];
+
+/// What the Terminal tab's `Syntax highlighting` offers.
+pub const HIGHLIGHTING: &[&str] = &["Standard keywords (OK/warning/error/...)", "None"];
+
+/// What the Bookmark tab's `Start session in` offers.
+pub const START_IN: &[&str] = &["Normal tab", "Split pane", "New window"];
 
 /// What the dialog produced.
 #[derive(Clone, Debug)]
@@ -274,6 +438,8 @@ pub struct SessionDialog {
     pub protocol: DialogProtocol,
     /// The field contents.
     pub fields: SessionFields,
+    /// Which of the lower tabs is showing.
+    pub secondary: SecondaryTab,
     outcome: Option<DialogOutcome>,
 }
 
@@ -283,6 +449,7 @@ impl Default for SessionDialog {
             open: false,
             protocol: DialogProtocol::Ssh,
             fields: SessionFields::default(),
+            secondary: SecondaryTab::Advanced,
             outcome: None,
         }
     }
@@ -311,6 +478,22 @@ impl SessionDialog {
                 self.fields.host = ssh.host.clone();
                 self.fields.port = ssh.port.to_string();
                 self.fields.user = ssh.user.clone().unwrap_or_default();
+                self.fields.compression = ssh.compression;
+                self.fields.execute_command = ssh.command.clone().unwrap_or_default();
+                self.fields.keep_open_after_command = ssh.keep_open_after_command;
+                if let bestterm_core_model::SshAuth::PublicKey { path, .. } = &ssh.auth {
+                    self.fields.use_private_key = true;
+                    self.fields.private_key = path.clone();
+                }
+                if let Some(proxy) = &ssh.proxy {
+                    self.fields.proxy_type = bestterm_core_model::ProxyKind::ALL
+                        .iter()
+                        .position(|kind| *kind == proxy.kind)
+                        .unwrap_or(0);
+                    self.fields.proxy_host = proxy.host.clone();
+                    self.fields.proxy_port = proxy.port.to_string();
+                    self.fields.proxy_login = proxy.login.clone().unwrap_or_default();
+                }
             }
             ProtocolConfig::Telnet(telnet) => {
                 self.protocol = DialogProtocol::Telnet;
@@ -358,10 +541,28 @@ impl SessionDialog {
                 old.host = new.host;
                 old.port = new.port;
                 old.user = new.user;
-                // `auth` is deliberately untouched. This dialog has no field for it, so whatever it
-                // produced is a default rather than a choice — and copying that over would turn
-                // every edited session into an agent session, which is precisely the bug that left
-                // 128 imported sessions unable to connect.
+                old.command = new.command;
+                old.keep_open_after_command = new.keep_open_after_command;
+                old.compression = new.compression;
+                old.proxy = new.proxy;
+                // `auth` moves only when the dialog actually said something about it, which is the
+                // one rule this merge exists for. `SshAuth` has more shapes than the dialog has
+                // fields -- a vault password, a keyboard-interactive login, the external `ssh`
+                // binary -- and copying a default over the top of one of those is the bug that left
+                // 128 imported sessions authenticating with an agent that was not running.
+                match new.auth {
+                    // A key was named, so that is a choice.
+                    bestterm_core_model::SshAuth::PublicKey { .. } => old.auth = new.auth,
+                    // The box was cleared on a session that had a key, which is also a choice: back
+                    // to the agent.
+                    bestterm_core_model::SshAuth::Agent
+                        if matches!(old.auth, bestterm_core_model::SshAuth::PublicKey { .. }) =>
+                    {
+                        old.auth = bestterm_core_model::SshAuth::Agent;
+                    }
+                    // Anything else the dialog produced is a default it had no field for.
+                    _ => {}
+                }
             }
             (ProtocolConfig::Telnet(new), ProtocolConfig::Telnet(old)) => *old = new,
             (ProtocolConfig::Rdp(new), ProtocolConfig::Rdp(old)) => {
@@ -419,6 +620,86 @@ impl SessionDialog {
         }
     }
 
+    /// The proxy the Network tab describes, or `None` for a direct connection.
+    fn proxy(&self) -> Option<bestterm_core_model::Proxy> {
+        let kind = *bestterm_core_model::ProxyKind::ALL
+            .get(self.fields.proxy_type)
+            .unwrap_or(&bestterm_core_model::ProxyKind::None);
+        if kind == bestterm_core_model::ProxyKind::None {
+            return None;
+        }
+        let login = self.fields.proxy_login.trim();
+        Some(bestterm_core_model::Proxy {
+            kind,
+            host: self.fields.proxy_host.trim().to_owned(),
+            // Zero rather than a guess: the reference shows 1080 because SOCKS uses it, and a
+            // silently substituted port is worse than one that is plainly unset.
+            port: self.fields.proxy_port.trim().parse().unwrap_or(0),
+            login: (!login.is_empty()).then(|| login.to_owned()),
+        })
+    }
+
+    /// What the session's name should be, or `None` to leave it as it is.
+    ///
+    /// Trimmed and checked for emptiness here rather than at the caller: a name is the thing a
+    /// session is found by in a tree of five hundred, and a blank one is a session somebody has
+    /// lost.
+    pub fn session_name(&self) -> Option<String> {
+        let name = self.fields.session_name.trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    }
+
+    /// The note on the Bookmark tab, or `None` when it was cleared.
+    pub fn comment(&self) -> Option<String> {
+        let comment = self.fields.comments.trim();
+        (!comment.is_empty()).then(|| comment.to_owned())
+    }
+
+    /// The per-session settings the dialog collects, merged onto what a node already has.
+    ///
+    /// Merged rather than replaced, for the same reason `merge_into` exists: a node carries
+    /// settings this dialog has no field for -- a font, a palette, a tab colour imported from
+    /// `.mxtsessions` -- and building a fresh set from the form would throw them away.
+    pub fn apply_settings(&self, settings: &mut bestterm_core_model::SettingsOverride) {
+        settings.x11_forwarding = Some(self.fields.x11_forwarding);
+        settings.backspace_sends_ctrl_h = Some(self.fields.backspace_sends_ctrl_h);
+        settings.lock_terminal_title = Some(self.fields.lock_terminal_title);
+        settings.reconnection_message = Some(self.fields.reconnection_message);
+        settings.terminal_type = TERMINAL_TYPES
+            .get(self.fields.terminal_type)
+            .map(|term| (*term).to_owned());
+        settings.log_session = Some(self.fields.log_output);
+        let path = self.fields.log_path.trim();
+        settings.log_path = (!path.is_empty()).then(|| path.to_owned());
+    }
+
+    /// Fill the dialog's settings fields from a node's.
+    pub fn load_settings(&mut self, settings: &bestterm_core_model::SettingsOverride) {
+        if let Some(value) = settings.x11_forwarding {
+            self.fields.x11_forwarding = value;
+        }
+        if let Some(value) = settings.backspace_sends_ctrl_h {
+            self.fields.backspace_sends_ctrl_h = value;
+        }
+        if let Some(value) = settings.lock_terminal_title {
+            self.fields.lock_terminal_title = value;
+        }
+        if let Some(value) = settings.reconnection_message {
+            self.fields.reconnection_message = value;
+        }
+        if let Some(term) = &settings.terminal_type
+            && let Some(index) = TERMINAL_TYPES.iter().position(|known| known == term)
+        {
+            self.fields.terminal_type = index;
+        }
+        if let Some(value) = settings.log_session {
+            self.fields.log_output = value;
+        }
+        if let Some(path) = &settings.log_path {
+            self.fields.log_path = path.clone();
+        }
+    }
+
     /// Build the session the fields describe.
     fn build(&self) -> DialogOutcome {
         let host = self.fields.host.trim();
@@ -454,10 +735,28 @@ impl SessionDialog {
 
         match self.protocol {
             DialogProtocol::Ssh => {
+                let command = self.fields.execute_command.trim();
+                let key = self.fields.private_key.trim();
                 DialogOutcome::Accepted(Box::new(ProtocolConfig::Ssh(SshConfig {
                     host: host.to_owned(),
                     port,
                     user: optional_user,
+                    // A key only when the box is ticked *and* a path was given: a ticked box with
+                    // nothing in it would produce a session that authenticates against an empty
+                    // path, which fails in a way that reads as a broken key rather than a blank
+                    // field.
+                    auth: if self.fields.use_private_key && !key.is_empty() {
+                        bestterm_core_model::SshAuth::PublicKey {
+                            path: key.to_owned(),
+                            passphrase: None,
+                        }
+                    } else {
+                        bestterm_core_model::SshAuth::Agent
+                    },
+                    command: (!command.is_empty()).then(|| command.to_owned()),
+                    keep_open_after_command: self.fields.keep_open_after_command,
+                    compression: self.fields.compression,
+                    proxy: self.proxy(),
                     ..SshConfig::default()
                 })))
             }
@@ -537,9 +836,7 @@ pub fn session_dialog(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDial
     });
 
     ui.add_space(6.0);
-    secondary_tab_row(ui, theme, dialog.protocol);
-    ui.add_space(6.0);
-    description_area(ui, theme, dialog.protocol);
+    secondary_tab_row(ui, theme, dialog);
     ui.add_space(8.0);
 
     // Centred, as measured, and both carrying a glyph. `vertical_centered` centres the layout it
@@ -725,26 +1022,345 @@ fn basic_fields(ui: &mut Ui, dialog: &mut SessionDialog) {
     });
 }
 
-fn secondary_tab_row(ui: &mut Ui, theme: &ChromeTheme, protocol: DialogProtocol) {
+/// The row of lower tabs, and whichever one is selected.
+fn secondary_tab_row(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
+    let protocol = dialog.protocol;
+    // The advanced tab is named after the protocol, which is why `secondary_tabs` does not list it.
+    let advanced = format!("Advanced {} settings", advanced_name(protocol));
+
     ui.horizontal(|ui| {
-        // The advanced tab is named after the protocol, which is why it is not in the measured list.
-        let advanced = format!("Advanced {} settings", advanced_name(protocol));
-        let _ = ui.selectable_label(false, advanced);
-        for tab in protocol.secondary_tabs() {
-            let _ = ui.selectable_label(false, tab.label());
+        if ui
+            .selectable_label(dialog.secondary == SecondaryTab::Advanced, advanced)
+            .clicked()
+        {
+            dialog.secondary = SecondaryTab::Advanced;
         }
-        let _ = ui.selectable_label(false, "★ Bookmark settings");
+        for tab in protocol.secondary_tabs() {
+            if ui
+                .selectable_label(dialog.secondary == *tab, tab.label())
+                .clicked()
+            {
+                dialog.secondary = *tab;
+            }
+        }
+        if ui
+            .selectable_label(
+                dialog.secondary == SecondaryTab::Bookmark,
+                SecondaryTab::Bookmark.label(),
+            )
+            .clicked()
+        {
+            dialog.secondary = SecondaryTab::Bookmark;
+        }
     });
+
+    // A tab the current protocol does not have cannot stay selected across a protocol change.
+    let available = protocol.secondary_tabs();
+    if !matches!(
+        dialog.secondary,
+        SecondaryTab::Advanced | SecondaryTab::Bookmark
+    ) && !available.contains(&dialog.secondary)
+    {
+        dialog.secondary = SecondaryTab::Advanced;
+    }
+
+    ui.add_space(6.0);
+    group_box(ui, theme, "", |ui| {
+        ui.set_min_height(180.0);
+        match dialog.secondary {
+            SecondaryTab::Advanced => advanced_tab(ui, theme, dialog),
+            SecondaryTab::Terminal => terminal_tab(ui, theme, &mut dialog.fields),
+            SecondaryTab::Network => network_tab(ui, theme, &mut dialog.fields),
+            SecondaryTab::Bookmark => bookmark_tab(ui, theme, &mut dialog.fields),
+        }
+    });
+}
+
+/// The advanced tab, which is per-protocol.
+///
+/// Only SSH is measured. The others get a line saying so rather than SSH's fields under another
+/// protocol's name, which would be a form that lies about what it sets.
+fn advanced_tab(ui: &mut Ui, theme: &ChromeTheme, dialog: &mut SessionDialog) {
+    if dialog.protocol != DialogProtocol::Ssh {
+        // What the reference itself shows in an advanced tab it has nothing to put in: the protocol's
+        // name and its icon, filling the space. Measured from the RDP tab, which looks exactly like
+        // this.
+        description_area(ui, theme, dialog.protocol);
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "The advanced {} settings have not been measured from the reference yet.",
+                advanced_name(dialog.protocol)
+            ))
+            .small()
+            .color(theme.text_dim),
+        );
+        return;
+    }
+    let fields = &mut dialog.fields;
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut fields.x11_forwarding, "X11-Forwarding");
+        ui.add_space(16.0);
+        ui.checkbox(&mut fields.compression, "Compression");
+        ui.add_space(16.0);
+        ui.label("Remote environment:");
+        choice(
+            ui,
+            "remote-env",
+            &mut fields.remote_environment,
+            REMOTE_ENVIRONMENTS,
+            150.0,
+        );
+    });
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ui.label("Execute command:");
+        ui.add(egui::TextEdit::singleline(&mut fields.execute_command).desired_width(210.0));
+        ui.add_space(16.0);
+        ui.checkbox(
+            &mut fields.keep_open_after_command,
+            "Do not exit after command ends",
+        );
+    });
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ui.label("SSH-browser type:");
+        choice(
+            ui,
+            "browser-type",
+            &mut fields.browser_type,
+            BROWSER_TYPES,
+            210.0,
+        );
+        ui.add_space(16.0);
+        ui.checkbox(
+            &mut fields.follow_ssh_path,
+            "Try to follow SSH path in browser",
+        );
+    });
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut fields.use_private_key, "Use private key");
+        // Editable whether or not the box is ticked, so a path can be typed before it is turned on --
+        // which is the order people do it in.
+        ui.add(egui::TextEdit::singleline(&mut fields.private_key).desired_width(210.0));
+        if ui
+            .button("📄")
+            .on_hover_text("There is no file picker yet — type or paste the path")
+            .clicked()
+        {
+            // Deliberately nothing: a button that opened nothing would be worse than one whose
+            // tooltip says where the path comes from.
+        }
+    });
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ui.label("Execute macro at session start:");
+        choice(
+            ui,
+            "macro",
+            &mut fields.macro_at_start,
+            MACRO_CHOICES,
+            210.0,
+        );
+    });
+
+    ui.add_space(4.0);
     ui.label(
         egui::RichText::new(
-            "These tabs hold dozens of fields each and have not been measured yet.",
+            "X11 forwarding, the command, the key and compression are saved and used. The browser \
+             type, the remote environment and the macro are saved and not yet acted on.",
         )
         .small()
         .color(theme.text_dim),
     );
 }
 
-/// The word the reference puts in `Advanced … settings`, which is not always the tab's label.
+/// The terminal tab.
+fn terminal_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
+    ui.horizontal(|ui| {
+        for label in ["Font settings", "Color settings", "Expert settings"] {
+            let _ = ui
+                .button(label)
+                .on_hover_text("Not measured from the reference yet");
+        }
+    });
+    ui.add_space(8.0);
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut fields.backspace_sends_ctrl_h, "Backspace sends ^H");
+        ui.add_space(16.0);
+        ui.checkbox(&mut fields.use_windows_path, "Use Windows PATH");
+        ui.add_space(16.0);
+        ui.label("Terminal type:");
+        choice(
+            ui,
+            "term-type",
+            &mut fields.terminal_type,
+            TERMINAL_TYPES,
+            130.0,
+        );
+    });
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut fields.log_output, "Log terminal output to:");
+        ui.add(egui::TextEdit::singleline(&mut fields.log_path).desired_width(210.0));
+        ui.add_space(16.0);
+        ui.label("Paste delay:");
+        choice(
+            ui,
+            "paste-delay",
+            &mut fields.paste_delay,
+            PASTE_DELAYS,
+            90.0,
+        );
+    });
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ui.label("Syntax highlighting:");
+        choice(
+            ui,
+            "highlighting",
+            &mut fields.highlighting,
+            HIGHLIGHTING,
+            260.0,
+        );
+        let _ = ui
+            .button("Customize")
+            .on_hover_text("Not measured from the reference yet");
+    });
+
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "The terminal type, the log and the Backspace behaviour are saved. Paste delay and \
+             highlighting are saved and not yet acted on.",
+        )
+        .small()
+        .color(theme.text_dim),
+    );
+}
+
+/// The network tab.
+fn network_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
+    let _ = ui
+        .button("    SSH gateway (jump host)")
+        .on_hover_text("Jump hosts are in the model and have no editor yet");
+    ui.add_space(10.0);
+
+    group_box(ui, theme, "Proxy settings (experimental)", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Proxy type:");
+            let kinds: Vec<&'static str> = bestterm_core_model::ProxyKind::ALL
+                .iter()
+                .map(|kind| kind.label())
+                .collect();
+            choice(ui, "proxy-type", &mut fields.proxy_type, &kinds, 130.0);
+            ui.add_space(12.0);
+            ui.label("Host:");
+            ui.add(egui::TextEdit::singleline(&mut fields.proxy_host).desired_width(110.0));
+            ui.add_space(12.0);
+            ui.label("Login:");
+            ui.add(egui::TextEdit::singleline(&mut fields.proxy_login).desired_width(90.0));
+            ui.add_space(12.0);
+            ui.label("Port:");
+            ui.add(egui::TextEdit::singleline(&mut fields.proxy_port).desired_width(60.0));
+        });
+    });
+
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "A proxy is saved with the session. Nothing routes through one yet, which is why the \
+             reference calls its own version experimental and this one says so outright.",
+        )
+        .small()
+        .color(theme.text_dim),
+    );
+}
+
+/// The bookmark tab.
+fn bookmark_tab(ui: &mut Ui, theme: &ChromeTheme, fields: &mut SessionFields) {
+    egui::Grid::new("bookmark")
+        .num_columns(2)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Session name:");
+            ui.horizontal(|ui| {
+                // The field that made editing possible at all. Left blank it falls back to the
+                // address, which is what the reference shows for a session nobody named.
+                ui.add(
+                    egui::TextEdit::singleline(&mut fields.session_name)
+                        .hint_text("the address")
+                        .desired_width(160.0),
+                );
+                ui.add_space(12.0);
+                ui.checkbox(&mut fields.lock_terminal_title, "Lock terminal title");
+                ui.add_space(12.0);
+                let _ = ui
+                    .button("Session Icon")
+                    .on_hover_text("Icons are imported and cannot be chosen here yet");
+            });
+            ui.end_row();
+
+            ui.label("Start session in");
+            ui.horizontal(|ui| {
+                choice(ui, "start-in", &mut fields.start_in, START_IN, 150.0);
+                ui.add_space(12.0);
+                ui.checkbox(
+                    &mut fields.reconnection_message,
+                    "Display reconnection message at session end",
+                );
+            });
+            ui.end_row();
+
+            ui.checkbox(&mut fields.customize_tab_color, "Customize tab color");
+            ui.horizontal(|ui| {
+                ui.label("Comments:");
+                ui.add(egui::TextEdit::singleline(&mut fields.comments).desired_width(240.0));
+            });
+            ui.end_row();
+        });
+
+    ui.add_space(8.0);
+    let _ = ui
+        .button("★  Create a desktop shortcut to this session")
+        .on_hover_text("Not implemented yet");
+
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "The name, the comment and the title lock are saved. Splits and separate windows do not \
+             exist yet, so `Start session in` is saved and ignored.",
+        )
+        .small()
+        .color(theme.text_dim),
+    );
+}
+
+/// A dropdown over a fixed list of labels, selected by index.
+///
+/// An index rather than an enum per list: the lists are measured strings, several of them name things
+/// this build cannot do yet, and a value outside what it understands has to survive being loaded and
+/// saved rather than collapse to the first entry.
+fn choice(ui: &mut Ui, id: &str, selected: &mut usize, options: &[&str], width: f32) {
+    let label = options.get(*selected).copied().unwrap_or("");
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(label)
+        .width(width)
+        .show_ui(ui, |ui| {
+            for (index, option) in options.iter().enumerate() {
+                ui.selectable_value(selected, index, *option);
+            }
+        });
+}
 fn advanced_name(protocol: DialogProtocol) -> &'static str {
     match protocol {
         DialogProtocol::Rdp => "Rdp",
@@ -783,6 +1399,228 @@ fn description_area(ui: &mut Ui, theme: &ChromeTheme, protocol: DialogProtocol) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dialog on an SSH session, for the round-trip tests below.
+    fn ssh_dialog() -> SessionDialog {
+        let mut dialog = SessionDialog::default();
+        dialog.open_for(&ProtocolConfig::Ssh(SshConfig {
+            host: "srv.int".to_string(),
+            port: 2222,
+            user: Some("ops".to_string()),
+            auth: bestterm_core_model::SshAuth::PublicKey {
+                path: r"D:\keys\ops.ppk".to_string(),
+                passphrase: None,
+            },
+            ..SshConfig::default()
+        }));
+        dialog
+    }
+
+    #[test]
+    fn a_private_key_survives_being_loaded_and_saved() {
+        // The field the whole Advanced tab was needed for. Before it, opening a session in the dialog
+        // and pressing OK replaced its key with the agent -- silently, and on a machine where the
+        // agent is not running.
+        let dialog = ssh_dialog();
+        assert!(dialog.fields.use_private_key);
+        assert_eq!(dialog.fields.private_key, r"D:\keys\ops.ppk");
+
+        let DialogOutcome::Accepted(produced) = dialog.build() else {
+            panic!("a complete form is accepted");
+        };
+        let ProtocolConfig::Ssh(ssh) = produced.as_ref() else {
+            panic!("ssh");
+        };
+        assert_eq!(
+            ssh.auth,
+            bestterm_core_model::SshAuth::PublicKey {
+                path: r"D:\keys\ops.ppk".to_string(),
+                passphrase: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_ticked_box_with_no_path_is_not_a_key() {
+        // It would produce a session authenticating against an empty path, which fails in a way that
+        // reads as a broken key rather than a blank field.
+        let mut dialog = ssh_dialog();
+        dialog.fields.private_key.clear();
+        let DialogOutcome::Accepted(produced) = dialog.build() else {
+            panic!("accepted");
+        };
+        let ProtocolConfig::Ssh(ssh) = produced.as_ref() else {
+            panic!("ssh");
+        };
+        assert_eq!(ssh.auth, bestterm_core_model::SshAuth::Agent);
+    }
+
+    #[test]
+    fn a_merge_never_replaces_an_auth_method_the_dialog_cannot_show() {
+        // The rule the merge exists for. A session authenticating with a vault password has to keep
+        // doing so after somebody corrects its port, because the dialog has no password field and
+        // whatever it produced for `auth` is a default rather than a choice.
+        let mut existing = ProtocolConfig::Ssh(SshConfig {
+            host: "srv.int".to_string(),
+            auth: bestterm_core_model::SshAuth::Password { credential: None },
+            ..SshConfig::default()
+        });
+        let produced = ProtocolConfig::Ssh(SshConfig {
+            host: "srv.int".to_string(),
+            port: 2200,
+            ..SshConfig::default()
+        });
+
+        SessionDialog::merge_into(produced, &mut existing);
+        let ProtocolConfig::Ssh(ssh) = &existing else {
+            panic!("ssh");
+        };
+        assert_eq!(ssh.port, 2200, "the port was the edit");
+        assert_eq!(
+            ssh.auth,
+            bestterm_core_model::SshAuth::Password { credential: None },
+            "and the password survived it"
+        );
+    }
+
+    #[test]
+    fn clearing_the_key_box_does_go_back_to_the_agent() {
+        // The other direction, which has to work or the box is one-way: a session with a key whose box
+        // is unticked is somebody choosing the agent, and that is a choice.
+        let mut existing = ProtocolConfig::Ssh(SshConfig {
+            auth: bestterm_core_model::SshAuth::PublicKey {
+                path: "old".to_string(),
+                passphrase: None,
+            },
+            ..SshConfig::default()
+        });
+        SessionDialog::merge_into(ProtocolConfig::Ssh(SshConfig::default()), &mut existing);
+        let ProtocolConfig::Ssh(ssh) = &existing else {
+            panic!("ssh");
+        };
+        assert_eq!(ssh.auth, bestterm_core_model::SshAuth::Agent);
+    }
+
+    #[test]
+    fn a_session_name_is_trimmed_and_an_empty_one_is_no_name_at_all() {
+        // Blank means "leave it as it is", not "call it nothing": a nameless row in a tree of five
+        // hundred is a session somebody has lost.
+        let mut dialog = SessionDialog::default();
+        assert_eq!(dialog.session_name(), None);
+        dialog.fields.session_name = "   ".to_string();
+        assert_eq!(dialog.session_name(), None);
+        dialog.fields.session_name = "  db106  ".to_string();
+        assert_eq!(dialog.session_name(), Some("db106".to_string()));
+    }
+
+    #[test]
+    fn the_settings_the_tabs_collect_reach_a_node_and_leave_the_rest_alone() {
+        // Merged, not replaced. A node carries settings this dialog has no field for -- a font, a
+        // palette, a tab colour that came in with an import -- and building a fresh set from the form
+        // would throw them away.
+        let mut settings = bestterm_core_model::SettingsOverride {
+            font_family: Some("Consolas".to_string()),
+            tab_color: Some([1, 2, 3]),
+            ..Default::default()
+        };
+
+        let mut dialog = SessionDialog::default();
+        dialog.fields.x11_forwarding = false;
+        dialog.fields.terminal_type = 1;
+        dialog.fields.log_output = true;
+        dialog.fields.log_path = "  D:/logs/session.txt ".to_string();
+        dialog.apply_settings(&mut settings);
+
+        assert_eq!(settings.x11_forwarding, Some(false));
+        assert_eq!(settings.terminal_type.as_deref(), Some(TERMINAL_TYPES[1]));
+        assert_eq!(settings.log_session, Some(true));
+        assert_eq!(settings.log_path.as_deref(), Some("D:/logs/session.txt"));
+        assert_eq!(
+            settings.font_family.as_deref(),
+            Some("Consolas"),
+            "a setting the dialog cannot show must survive it"
+        );
+        assert_eq!(settings.tab_color, Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn settings_round_trip_through_the_dialog() {
+        let mut settings = bestterm_core_model::SettingsOverride::default();
+        let mut out = SessionDialog::default();
+        out.fields.x11_forwarding = false;
+        out.fields.backspace_sends_ctrl_h = false;
+        out.fields.terminal_type = 2;
+        out.apply_settings(&mut settings);
+
+        let mut back = SessionDialog::default();
+        back.load_settings(&settings);
+        assert!(!back.fields.x11_forwarding);
+        assert!(!back.fields.backspace_sends_ctrl_h);
+        assert_eq!(back.fields.terminal_type, 2);
+    }
+
+    #[test]
+    fn a_proxy_is_only_built_when_one_was_chosen() {
+        let mut dialog = SessionDialog::default();
+        assert!(dialog.proxy().is_none(), "None means a direct connection");
+
+        // Index 2 is Socks5, per the measured order.
+        dialog.fields.proxy_type = 2;
+        dialog.fields.proxy_host = " gate.int ".to_string();
+        let proxy = dialog.proxy().expect("a proxy was chosen");
+        assert_eq!(proxy.kind, bestterm_core_model::ProxyKind::Socks5);
+        assert_eq!(proxy.host, "gate.int");
+        assert_eq!(proxy.port, 1080);
+        assert_eq!(proxy.login, None, "an empty login is no login");
+    }
+
+    #[test]
+    fn the_measured_dropdowns_are_not_empty_and_their_defaults_are_the_reference_s() {
+        // A dropdown with nothing in it draws as a blank box, which reads as a broken control.
+        for list in [
+            REMOTE_ENVIRONMENTS,
+            BROWSER_TYPES,
+            MACRO_CHOICES,
+            TERMINAL_TYPES,
+            PASTE_DELAYS,
+            HIGHLIGHTING,
+            START_IN,
+        ] {
+            assert!(!list.is_empty());
+        }
+
+        // What the reference has ticked and selected on a fresh dialog.
+        let fields = SessionFields::default();
+        assert!(fields.x11_forwarding);
+        assert!(fields.compression);
+        assert!(fields.backspace_sends_ctrl_h);
+        assert!(fields.use_windows_path);
+        assert!(fields.lock_terminal_title);
+        assert!(fields.reconnection_message);
+        assert_eq!(
+            REMOTE_ENVIRONMENTS[fields.remote_environment],
+            "Interactive shell"
+        );
+        assert_eq!(BROWSER_TYPES[fields.browser_type], "SFTP protocol");
+        assert_eq!(TERMINAL_TYPES[fields.terminal_type], "xterm");
+        assert_eq!(PASTE_DELAYS[fields.paste_delay], "Auto");
+        assert_eq!(START_IN[fields.start_in], "Normal tab");
+        assert_eq!(fields.proxy_port, "1080");
+    }
+
+    #[test]
+    fn every_protocol_has_an_advanced_and_a_bookmark_tab() {
+        // Both are in the enum precisely so they can be selected. Before that the row was four labels
+        // that could be clicked and did nothing.
+        for protocol in DialogProtocol::ALL {
+            let dialog = SessionDialog {
+                protocol,
+                ..SessionDialog::default()
+            };
+            assert_eq!(dialog.secondary, SecondaryTab::Advanced, "{protocol:?}");
+        }
+        assert_eq!(SecondaryTab::Bookmark.label(), "★ Bookmark settings");
+    }
 
     #[test]
     fn there_are_fifteen_protocol_tabs_in_the_measured_order() {
