@@ -98,6 +98,10 @@ jobs:
           UsePAM no
           StrictModes no
           AllowUsers bestterm-test
+          # This config replaces the distribution's entirely, and sshd has no built-in default for
+          # subsystems -- so without this line every SFTP test fails on a refused subsystem request
+          # while shells keep working. `internal-sftp` needs no separate binary.
+          Subsystem sftp internal-sftp
           # Both defaults, stated so the forwarding tests do not depend on a distribution
           # keeping them. GatewayPorts stays off: the tests bind loopback on purpose.
           AllowTcpForwarding yes

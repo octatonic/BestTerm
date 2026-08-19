@@ -23,9 +23,9 @@ use bestterm_transport::{
     ExitInfo, GridSize, OpenTransport, Result as TransportResult, Transport, TransportError,
     TransportEvent, TransportKind,
 };
-use russh::client::{self, Handle};
+use russh::client::{self, Handle, Msg};
 use russh::keys::ssh_key;
-use russh::{ChannelMsg, Disconnect};
+use russh::{ChannelMsg, ChannelStream, Disconnect};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::auth::Auth;
@@ -473,6 +473,24 @@ impl SshConnection {
     }
 
     /// Open a shell with a pseudo-terminal.
+    /// Open the `sftp` subsystem on this connection and hand back the raw channel.
+    ///
+    /// A second channel on the connection somebody is already typing into, which is the whole point
+    /// of holding the SSH session in-process: a file browser beside a terminal costs one channel, not
+    /// a second login. Nothing here knows what SFTP is -- the framing lives in `bestterm-proto-sftp`,
+    /// so this crate does not grow a dependency on it.
+    ///
+    /// # Errors
+    ///
+    /// If the channel cannot be opened, or the server has no `sftp` subsystem. The second is common
+    /// enough to be worth saying plainly: an OpenSSH server with `Subsystem sftp` commented out
+    /// refuses the request while shells keep working.
+    pub async fn open_sftp(&self) -> Result<ChannelStream<Msg>, SshError> {
+        let channel = self.handle.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        Ok(channel.into_stream())
+    }
+
     pub async fn open_shell(&self, size: GridSize, term: &str) -> Result<OpenTransport, SshError> {
         let channel = self.handle.channel_open_session().await?;
 

@@ -1,0 +1,25 @@
+[package]
+name = "bestterm-proto-sftp"
+description = "SFTP for BestTerm: a file browser on the SSH session somebody is already typing into"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bestterm-proto-ssh.workspace = true
+russh-sftp.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# Only the live test needs these: it builds a target out of environment variables, and a secret
+# has to be wrapped before the connection will take it.
+bestterm-core-vault.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

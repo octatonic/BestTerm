@@ -32,6 +32,7 @@ bestterm-config = { path = "crates/config", version = "0.1.0" }
 bestterm-core-vault = { path = "crates/core-vault", version = "0.1.0" }
 bestterm-importers = { path = "crates/importers", version = "0.1.0" }
 bestterm-proto-ssh = { path = "crates/proto-ssh", version = "0.1.0" }
+bestterm-proto-sftp = { path = "crates/proto-sftp", version = "0.1.0" }
 bestterm-proto-telnet = { path = "crates/proto-telnet", version = "0.1.0" }
 bestterm-proto-serial = { path = "crates/proto-serial", version = "0.1.0" }
 bestterm-proto-vnc = { path = "crates/proto-vnc", version = "0.1.0" }
@@ -81,10 +82,16 @@ uuid = { version = "1.24", features = ["v4", "serde"] }
 # reasons in docs/ARCHITECTURE.md: BestTerm needs in-process control of channels
 # so an SFTP panel can share the terminal's connection.
 russh = "0.62"
+# SFTP framing over a channel this crate does not own. Apache-2.0, and transport-agnostic: it takes
+# anything that reads and writes, so it is not pinned to a russh version.
+russh-sftp = "2.4"
 tokio = { version = "1.53", features = [
     "rt-multi-thread",
     "net",
     "io-util",
+    # File transfers. tokio's own file type rather than std behind `spawn_blocking`, because a
+    # transfer reads and writes in a loop and each hop would otherwise be a thread handoff.
+    "fs",
     "sync",
     "time",
     "macros",
