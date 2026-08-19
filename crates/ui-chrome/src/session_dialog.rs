@@ -1930,6 +1930,46 @@ mod tests {
     }
 
     #[test]
+    fn editing_a_session_keeps_what_the_dialog_cannot_show() {
+        // Tunnels and bastion chains have no fields in this dialog, so the merge leaves them alone.
+        // That is right, and it is only true by omission -- which is how the RDP clipboard flag came
+        // to be silently reset the moment a checkbox for it appeared. Pinned here so that adding a
+        // field for one of these has to be a deliberate change to a failing test rather than a
+        // discovery made by somebody whose port forward disappeared after they renamed a session.
+        let bastion = bestterm_core_model::NodeId::new();
+        let forward = bestterm_core_model::PortForward {
+            kind: bestterm_core_model::ForwardKind::Local,
+            bind_address: "127.0.0.1".to_owned(),
+            bind_port: 15432,
+            target_host: Some("a-database".to_owned()),
+            target_port: Some(5432),
+            auto_open: true,
+        };
+        let mut target = ProtocolConfig::Ssh(SshConfig {
+            host: "old.invalid".to_owned(),
+            port: 22,
+            jump_hosts: vec![bastion],
+            forwards: vec![forward.clone()],
+            ..SshConfig::default()
+        });
+
+        let mut dialog = SessionDialog::default();
+        dialog.open_for(&target);
+        dialog.fields.host = "new.invalid".to_owned();
+        match dialog.build() {
+            DialogOutcome::Accepted(produced) => SessionDialog::merge_into(*produced, &mut target),
+            other => panic!("the dialog refused a complete SSH session: {other:?}"),
+        }
+
+        let ProtocolConfig::Ssh(ssh) = target else {
+            panic!("an SSH session stopped being one")
+        };
+        assert_eq!(ssh.host, "new.invalid", "the edit still lands");
+        assert_eq!(ssh.jump_hosts, vec![bastion], "the bastion chain survives");
+        assert_eq!(ssh.forwards, vec![forward], "and so does the tunnel");
+    }
+
+    #[test]
     fn a_vnc_session_can_be_told_not_to_send_input() {
         // Read from .mxtsessions since the importer was written, and until now there was nowhere
         // to see it and no way to change it -- so a session marked view-only typed into the
