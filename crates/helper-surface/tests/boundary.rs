@@ -22,7 +22,7 @@
 //! test that silently stops testing is worse than one that is absent.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bestterm_ipc_frame::ConnectRequest;
 use bestterm_surface::{FrameSize, GraphicalSurface, SurfaceEvent, SurfaceKind};
@@ -117,6 +117,14 @@ fn the_helper_starts_reads_our_request_and_reports_back() {
         "nothing was connected, so nothing should have drawn: {seen:?}"
     );
 
+    // Waited for, not read once. The wake happens in the reader thread on the line *after* the send,
+    // so this test can see the event and reach the assertion before that line runs -- which is
+    // exactly what happened: it passed on Windows and lost the race on Linux. The property is real,
+    // so it is worth waiting for rather than dropping.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while wakes.load(std::sync::atomic::Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert!(
         wakes.load(std::sync::atomic::Ordering::SeqCst) > 0,
         "the surface has to ask for a repaint, or nothing would ever draw what it reported"
