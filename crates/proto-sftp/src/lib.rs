@@ -26,6 +26,7 @@ use std::path::Path;
 
 use bestterm_proto_ssh::SshConnection;
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 /// What went wrong.
@@ -418,10 +419,22 @@ impl Sftp {
                 })?;
         }
 
-        // Opened for writing and positioned, rather than opened in append mode: a server that ignores
-        // the append flag would otherwise silently write the tail twice, and a seek that the server
+        // Truncating only when starting from nothing. `create` means CREATE|TRUNCATE|WRITE, so
+        // resuming through it emptied the file first and then seeked past the end of what it had just
+        // destroyed -- the local read hit EOF immediately, nothing was written, and a 200 KB file
+        // became a zero-byte one. It reported success, too: the byte count is `already` plus what was
+        // copied, and both halves were consistent with a file that no longer existed. A real server
+        // caught this, which no amount of reading the code had.
+        //
+        // Positioned rather than opened in append mode, which is the original reason for not using
+        // `create`: a server that ignores APPEND would silently write the tail twice, and a seek it
         // refuses fails loudly instead.
-        let mut sink = self.session.create(remote).await?;
+        let flags = if already > 0 {
+            OpenFlags::CREATE | OpenFlags::WRITE
+        } else {
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE
+        };
+        let mut sink = self.session.open_with_flags(remote, flags).await?;
         if already > 0 {
             sink.seek(std::io::SeekFrom::Start(already))
                 .await

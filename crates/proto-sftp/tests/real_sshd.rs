@@ -218,7 +218,12 @@ async fn a_transfer_comes_back_byte_for_byte_and_resumes_where_it_stopped() {
     );
 
     // Resuming something already complete must do nothing. This is the boundary an off-by-one turns
-    // into a file with its own tail appended twice.
+    // into a file with its own tail appended twice -- and it is the assertion that caught a resumed
+    // upload emptying the remote file, because `create` in SFTP means truncate.
+    //
+    // The returned count is checked too, and on its own it proved nothing: it was `already` plus what
+    // was copied, so it read back as a whole file while the file was zero bytes. The server's opinion
+    // is the only one that counts here.
     let again = sftp
         .upload(&local, &remote, true, &mut |_, _| {})
         .await
@@ -229,6 +234,35 @@ async fn a_transfer_comes_back_byte_for_byte_and_resumes_where_it_stopped() {
         payload.len() as u64,
         "a completed transfer resumed has to leave the file its own length"
     );
+    assert_eq!(
+        read_remote(&sftp, &remote, "after-complete-resume").await,
+        payload,
+        "and its own contents -- a truncation that happened to preserve the size would pass on \
+         length alone"
+    );
+
+    // A *partial* upload resumed, which is the case resuming exists for and the one that was not
+    // covered when the truncation went in. The remote starts as the first 70,000 bytes, exactly as an
+    // interrupted transfer would have left it.
+    let interrupted = join(&home, "bestterm-sftp-partial-up");
+    let head = write_scratch("bestterm-transfer-head", &payload[..70_000]);
+    sftp.upload(&head, &interrupted, false, &mut |_, _| {})
+        .await
+        .expect("the first part failed");
+    assert_eq!(sftp.about(&interrupted).await.expect("stat").size, 70_000);
+
+    let finished_up = sftp
+        .upload(&local, &interrupted, true, &mut |_, _| {})
+        .await
+        .expect("the resumed upload failed");
+    assert_eq!(finished_up as usize, payload.len());
+    assert_eq!(
+        read_remote(&sftp, &interrupted, "after-partial-resume").await,
+        payload,
+        "resuming has to continue the remote file rather than restart, duplicate, or empty it"
+    );
+    sftp.remove_file(&interrupted).await.expect("cleanup");
+    let _ = std::fs::remove_file(&head);
 
     let back = std::env::temp_dir().join("bestterm-transfer-down");
     let _ = std::fs::remove_file(&back);
@@ -457,6 +491,21 @@ fn next(events: &crossbeam_channel::Receiver<FileEvent>) -> FileEvent {
     events
         .recv_timeout(std::time::Duration::from_secs(30))
         .expect("the session stopped reporting")
+}
+
+/// Fetch a remote file's bytes, through a download to a scratch path.
+///
+/// The comparison the size assertions cannot make: a wrong offset that happens to leave the right
+/// length -- a tail written over itself, say -- passes on size and fails here.
+async fn read_remote(sftp: &Sftp, remote: &str, tag: &str) -> Vec<u8> {
+    let scratch = std::env::temp_dir().join(format!("bestterm-verify-{tag}"));
+    let _ = std::fs::remove_file(&scratch);
+    sftp.download(remote, &scratch, false, &mut |_, _| {})
+        .await
+        .expect("the verification download failed");
+    let bytes = std::fs::read(&scratch).expect("the verification file could not be read");
+    let _ = std::fs::remove_file(&scratch);
+    bytes
 }
 
 /// Write a local scratch file and return its path.
