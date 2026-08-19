@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use bestterm_core_vault::Secret;
-use bestterm_proto_sftp::{EntryKind, Sftp, join};
+use bestterm_proto_sftp::{EntryKind, FileCommand, FileEvent, Sftp, join};
 use bestterm_proto_ssh::known_hosts::KnownHosts;
 use bestterm_proto_ssh::{Auth, SshConnection, StrictVerifier, Target};
 
@@ -310,6 +310,153 @@ async fn renaming_moves_a_file_and_a_refused_operation_says_why() {
 
     sftp.remove_file(&to).await.expect("cleanup");
     connection.disconnect().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_session_answers_commands_and_reports_a_transfer_moving() {
+    // The loop an interface actually drives: commands in, events out, nothing awaited on the
+    // drawing side. Run against the real server because the interesting failures are ordering and
+    // throttling, and neither shows up against a mock.
+    let server = server_or_skip!();
+    let connection = std::sync::Arc::new(server.connect().await);
+
+    let woken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let waker = {
+        let woken = std::sync::Arc::clone(&woken);
+        std::sync::Arc::new(move || {
+            woken.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }) as bestterm_proto_sftp::session::Waker
+    };
+
+    let (session, events) =
+        bestterm_proto_sftp::session::start(std::sync::Arc::clone(&connection), "test", waker);
+
+    // Ready comes first, unasked: an interface needs somewhere to open before it can draw anything.
+    let home = match next(&events) {
+        FileEvent::Ready { home } => home,
+        other => panic!("the first event has to say where the account starts: {other:?}"),
+    };
+    assert!(home.starts_with('/'));
+
+    let root = bestterm_proto_sftp::join(&home, "bestterm-session");
+    session
+        .send(FileCommand::MakeDirectory(root.clone()))
+        .expect("the session is open");
+    match next(&events) {
+        FileEvent::Done(said) => assert!(said.contains("created"), "{said}"),
+        other => panic!("mkdir reported {other:?}"),
+    }
+
+    // Big enough to take more than one progress interval on a loopback connection, and an odd
+    // size for the same reason as the transfer test.
+    let payload: Vec<u8> = (0..3_000_007_u32).map(|i| (i % 251) as u8).collect();
+    let local = write_scratch("bestterm-session-payload", &payload);
+    let remote = bestterm_proto_sftp::join(&root, "payload");
+
+    session
+        .send(FileCommand::Upload {
+            id: 42,
+            local: local.clone(),
+            remote: remote.clone(),
+            resume: false,
+        })
+        .expect("the session is open");
+
+    let mut progress = Vec::new();
+    let bytes = loop {
+        match next(&events) {
+            FileEvent::Progress { id, done, total } => {
+                assert_eq!(id, 42, "progress is labelled with its own transfer");
+                assert_eq!(total, Some(payload.len() as u64));
+                progress.push(done);
+            }
+            FileEvent::Finished { id, bytes } => {
+                assert_eq!(id, 42);
+                break bytes;
+            }
+            other => panic!("a transfer reported {other:?}"),
+        }
+    };
+    assert_eq!(bytes as usize, payload.len());
+    assert_eq!(progress.first(), Some(&0), "a bar starts at zero");
+    assert!(
+        progress.windows(2).all(|pair| pair[0] <= pair[1]),
+        "progress cannot go backwards: {progress:?}"
+    );
+    // Three megabytes is ninety-odd chunks. Throttled, it must be far fewer events than that.
+    assert!(
+        progress.len() < 50,
+        "{} progress events for three megabytes is the flood throttling exists to stop",
+        progress.len()
+    );
+
+    session
+        .send(FileCommand::List(root.clone()))
+        .expect("the session is open");
+    match next(&events) {
+        FileEvent::Listing { path, entries } => {
+            assert_eq!(path, root);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].name, "payload");
+            assert_eq!(entries[0].kind, EntryKind::File);
+            assert_eq!(entries[0].size, payload.len() as u64);
+        }
+        other => panic!("listing reported {other:?}"),
+    }
+
+    // A refusal is an event, not a panic and not silence: deleting a directory as a file fails.
+    session
+        .send(FileCommand::Remove {
+            path: root.clone(),
+            directory: false,
+        })
+        .expect("the session is open");
+    match next(&events) {
+        FileEvent::Failed { what, why } => {
+            assert!(what.contains("deleting"), "{what}");
+            assert!(!why.trim().is_empty(), "a refusal has to say something");
+        }
+        other => panic!("deleting a directory as a file reported {other:?}"),
+    }
+
+    // And the session survives it, which is the point of reporting rather than closing.
+    session
+        .send(FileCommand::Remove {
+            path: remote,
+            directory: false,
+        })
+        .expect("the session is open");
+    assert!(matches!(next(&events), FileEvent::Done(_)));
+    session
+        .send(FileCommand::Remove {
+            path: root,
+            directory: true,
+        })
+        .expect("the session is open");
+    assert!(matches!(next(&events), FileEvent::Done(_)));
+
+    assert!(
+        woken.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "nothing asked for a repaint, so nothing would have drawn any of this"
+    );
+
+    session
+        .send(FileCommand::Shutdown)
+        .expect("the session is open");
+    assert!(matches!(next(&events), FileEvent::Closed));
+
+    let _ = std::fs::remove_file(&local);
+    connection.disconnect().await;
+}
+
+/// The next event, or a failure that says what was being waited for.
+///
+/// A timeout rather than a blocking receive: a test that hangs tells nobody anything, and every
+/// operation here is against a server on loopback.
+fn next(events: &crossbeam_channel::Receiver<FileEvent>) -> FileEvent {
+    events
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the session stopped reporting")
 }
 
 /// Write a local scratch file and return its path.

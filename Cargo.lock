@@ -428,6 +428,7 @@ version = "0.1.0"
 dependencies = [
  "bestterm-core-vault",
  "bestterm-proto-ssh",
+ "crossbeam-channel",
  "russh-sftp",
  "thiserror 2.0.20",
  "tokio",

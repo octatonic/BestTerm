@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 bestterm-proto-ssh.workspace = true
+crossbeam-channel.workspace = true
 russh-sftp.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -22,4 +23,5 @@ tracing.workspace = true
 # Only the live test needs these: it builds a target out of environment variables, and a secret
 # has to be wrapped before the connection will take it.
 bestterm-core-vault.workspace = true
+crossbeam-channel.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

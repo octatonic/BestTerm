@@ -18,6 +18,10 @@
 //! ([`join`], [`parent`], [`normalise`]) are POSIX-only and are tested as such -- on both platforms,
 //! because the bug they exist to prevent only appears on one of them.
 
+pub mod session;
+
+pub use session::{FileCommand, FileEvent, FileSession};
+
 use std::path::Path;
 
 use bestterm_proto_ssh::SshConnection;
@@ -300,7 +304,7 @@ impl Sftp {
         remote: &str,
         local: &Path,
         resume: bool,
-        progress: &mut dyn FnMut(u64, Option<u64>),
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
     ) -> Result<u64> {
         let total = self
             .session
@@ -383,7 +387,7 @@ impl Sftp {
         local: &Path,
         remote: &str,
         resume: bool,
-        progress: &mut dyn FnMut(u64, Option<u64>),
+        progress: &mut (dyn FnMut(u64, Option<u64>) + Send),
     ) -> Result<u64> {
         let total = tokio::fs::metadata(local).await.ok().map(|m| m.len());
 
