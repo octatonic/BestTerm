@@ -157,6 +157,20 @@ impl FileSession {
     pub fn is_open(&self) -> bool {
         !self.commands.is_closed()
     }
+
+    /// A handle with nothing behind it.
+    ///
+    /// Every command sent to it fails, which is what a session whose connection has gone does. Useful
+    /// as the starting state for something that will be given a real session later, and in tests that
+    /// are about what an interface does with events rather than about talking to a server -- where the
+    /// alternative is a stub that accepts commands nothing will ever act on, and so cannot show a
+    /// caller mishandling a refusal.
+    #[must_use]
+    pub fn closed() -> Self {
+        let (commands, receiver) = mpsc::unbounded_channel();
+        drop(receiver);
+        Self { commands }
+    }
 }
 
 /// Start a file session on an SSH connection somebody else owns.

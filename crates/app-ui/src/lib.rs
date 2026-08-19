@@ -3,6 +3,7 @@
 //! This is the only crate that knows about all the others. Everything below it is independently
 //! testable, which is the point — see `docs/ARCHITECTURE.md`.
 
+mod files_tab;
 mod keymap;
 mod pane;
 mod session_menu;
@@ -111,7 +112,11 @@ pub struct BestTermApp {
     /// Stored credentials, and the state of the prompt over them.
     vault: VaultState,
     /// A session that was waiting for the vault to open.
-    pending_session: Option<bestterm_core_model::SshConfig>,
+    /// A session that was waiting for the vault to open, and whether it wanted a file browser.
+    ///
+    /// The flag matters: without it, unlocking the vault for a file browser opened a shell instead,
+    /// which is a different session than the one that was asked for.
+    pending_session: Option<(bestterm_core_model::SshConfig, bool)>,
     /// SSH connections with at least one tab open, and what to call them.
     ///
     /// Held here as well as in the tabs because a tunnel outlives the tab that started it and has to
@@ -342,57 +347,8 @@ impl BestTermApp {
     /// Returns immediately: a connection takes as long as a network does, and the frame loop cannot
     /// wait for one. The outcome arrives on [`Self::sessions`] and is picked up by a later frame.
     fn connect_ssh(&mut self, config: bestterm_core_model::SshConfig, ctx: &egui::Context) {
-        use bestterm_core_model::SshAuth;
-        use bestterm_proto_ssh::Auth;
-
-        // Resolved before anything is spawned, because a locked vault means asking a question rather
-        // than starting a connection that would fail on the far side of a network round trip.
-        let auth = match &config.auth {
-            SshAuth::Agent => Auth::Agent,
-            SshAuth::Password { credential: None } => {
-                // The session says "password" and names no entry, which is what an imported session
-                // looks like when its password was never brought across.
-                self.notices.push(format!(
-                    "{} has no stored password; add one or use an agent key",
-                    config.host
-                ));
-                return;
-            }
-            SshAuth::Password {
-                credential: Some(credential),
-            } => {
-                let name = credential.key().to_owned();
-                match self.vault.get(&name) {
-                    Some(secret) => Auth::Password(secret),
-                    None if !self.vault.is_open() => {
-                        self.vault
-                            .ask(self.store.as_ref(), Some(PendingUnlock::Session));
-                        self.pending_session = Some(config);
-                        return;
-                    }
-                    None => {
-                        self.notices
-                            .push(format!("the vault holds no entry called '{name}'"));
-                        return;
-                    }
-                }
-            }
-            SshAuth::PublicKey { path, .. } => Auth::PrivateKeyFile {
-                path: std::path::PathBuf::from(path),
-                // A passphrase from the vault comes with key authentication proper; a key without one
-                // works today and is the common case for a key an agent is not holding.
-                passphrase: None,
-            },
-            other => {
-                self.notices.push(format!(
-                    "{} authentication is not wired up yet",
-                    match other {
-                        SshAuth::KeyboardInteractive => "keyboard-interactive",
-                        _ => "this",
-                    }
-                ));
-                return;
-            }
+        let Some(auth) = self.resolve_auth(&config, false) else {
+            return;
         };
 
         let waker = {
@@ -415,12 +371,107 @@ impl BestTermApp {
             config,
             auth,
             read_known_hosts(),
-            size,
+            ssh::Purpose::Shell(size),
             self.sessions.0.clone(),
             waker,
         );
     }
 
+    /// Open a file browser on a host.
+    ///
+    /// The same connection work as [`BestTermApp::connect_ssh`] -- the same authentication, the same
+    /// host key question, the same vault -- differing only in what the tab that comes out shows. The
+    /// duplication here is the four lines of plumbing; everything that could be got wrong is shared.
+    fn connect_files(&mut self, config: bestterm_core_model::SshConfig, ctx: &egui::Context) {
+        let Some(auth) = self.resolve_auth(&config, true) else {
+            return;
+        };
+
+        let waker = {
+            let ctx = ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint())
+                as std::sync::Arc<dyn Fn() + Send + Sync>
+        };
+
+        tracing::info!(host = %config.host, port = config.port, "opening a file browser");
+        ssh::connect(
+            self.runtime.handle(),
+            config,
+            auth,
+            read_known_hosts(),
+            ssh::Purpose::Files,
+            self.sessions.0.clone(),
+            waker,
+        );
+    }
+
+    /// Work out how to authenticate, asking for the vault if that is what is missing.
+    ///
+    /// `None` means "not now": either something was said in the notices, or the vault prompt is up and
+    /// the session has been remembered to resume once it opens.
+    ///
+    /// Shared by the shell and the file browser because every branch here is a way to get a session
+    /// wrong -- an imported session with no stored password, a locked vault, a key the vault does not
+    /// hold -- and two copies of it would be two chances to fix only one.
+    fn resolve_auth(
+        &mut self,
+        config: &bestterm_core_model::SshConfig,
+        for_files: bool,
+    ) -> Option<bestterm_proto_ssh::Auth> {
+        use bestterm_core_model::SshAuth;
+        use bestterm_proto_ssh::Auth;
+
+        // Resolved before anything is spawned, because a locked vault means asking a question rather
+        // than starting a connection that would fail on the far side of a network round trip.
+        let auth = match &config.auth {
+            SshAuth::Agent => Auth::Agent,
+            SshAuth::Password { credential: None } => {
+                // The session says "password" and names no entry, which is what an imported session
+                // looks like when its password was never brought across.
+                self.notices.push(format!(
+                    "{} has no stored password; add one or use an agent key",
+                    config.host
+                ));
+                return None;
+            }
+            SshAuth::Password {
+                credential: Some(credential),
+            } => {
+                let name = credential.key().to_owned();
+                match self.vault.get(&name) {
+                    Some(secret) => Auth::Password(secret),
+                    None if !self.vault.is_open() => {
+                        self.vault
+                            .ask(self.store.as_ref(), Some(PendingUnlock::Session));
+                        self.pending_session = Some((config.clone(), for_files));
+                        return None;
+                    }
+                    None => {
+                        self.notices
+                            .push(format!("the vault holds no entry called '{name}'"));
+                        return None;
+                    }
+                }
+            }
+            SshAuth::PublicKey { path, .. } => Auth::PrivateKeyFile {
+                path: std::path::PathBuf::from(path),
+                // A passphrase from the vault comes with key authentication proper; a key without one
+                // works today and is the common case for a key an agent is not holding.
+                passphrase: None,
+            },
+            other => {
+                self.notices.push(format!(
+                    "{} authentication is not wired up yet",
+                    match other {
+                        SshAuth::KeyboardInteractive => "keyboard-interactive",
+                        _ => "this",
+                    }
+                ));
+                return None;
+            }
+        };
+        Some(auth)
+    }
     /// Open a session of whatever protocol it is.
     ///
     /// One function, because there are two ways to ask -- the session tree and the Session dialog --
@@ -433,6 +484,7 @@ impl BestTermApp {
             ProtocolConfig::Vnc(vnc) => self.connect_vnc(vnc, ctx),
             ProtocolConfig::Telnet(telnet) => self.connect_telnet(telnet, ctx),
             ProtocolConfig::Serial(serial) => self.open_serial(&serial, ctx),
+            ProtocolConfig::Sftp(ssh) => self.connect_files(ssh, ctx),
             other => self.notices.push(format!(
                 "{} sessions cannot be opened yet",
                 other.protocol().id()
@@ -803,6 +855,38 @@ impl BestTermApp {
     fn drain_sessions(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.sessions.1.try_recv() {
             match event {
+                SessionEvent::FilesOpened {
+                    title,
+                    session,
+                    events,
+                    connection,
+                    record,
+                } => {
+                    if let Some(record) = record {
+                        append_known_host(&record);
+                    }
+
+                    // Registered like any other connection: a file browser is a session with
+                    // channels to spare, and the tunnel window has no reason to know the
+                    // difference.
+                    let id = tunnels::ConnectionId(self.next_connection);
+                    self.next_connection += 1;
+                    self.connections.push(tunnels::LiveConnection {
+                        id,
+                        label: title.clone(),
+                        connection: std::sync::Arc::clone(&connection),
+                    });
+
+                    let tab = crate::files_tab::FilesTab::adopt(
+                        session,
+                        events,
+                        title,
+                        Some(connection),
+                        Some(id),
+                    );
+                    self.tabs.push(pane::Pane::Files(Box::new(tab)));
+                    self.chrome.active_tab = self.tabs.len() - 1;
+                }
                 SessionEvent::Opened {
                     title,
                     open,
@@ -1035,10 +1119,14 @@ impl BestTermApp {
         }
         if submit {
             let resumed = self.vault.submit(self.store.as_ref());
-            if let (Some(PendingUnlock::Session), Some(config)) =
+            if let (Some(PendingUnlock::Session), Some((config, for_files))) =
                 (resumed, self.pending_session.take())
             {
-                self.connect_ssh(config, ctx);
+                if for_files {
+                    self.connect_files(config, ctx);
+                } else {
+                    self.connect_ssh(config, ctx);
+                }
             }
         }
     }
@@ -1850,6 +1938,10 @@ impl BestTermApp {
         let tab = match tab {
             pane::Pane::Surface(surface) => {
                 surface.show(ui);
+                return;
+            }
+            pane::Pane::Files(files) => {
+                files.show(ui, &self.theme);
                 return;
             }
             pane::Pane::Terminal(terminal) => terminal,

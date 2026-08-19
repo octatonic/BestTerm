@@ -39,6 +39,11 @@ pub struct ChromeTheme {
     pub tab_active_bg: Color32,
     /// Fill of an inactive tab.
     pub tab_inactive_bg: Color32,
+    /// Text for something that went wrong.
+    ///
+    /// Dark enough to read on the light chrome rather than the pure red every framework reaches
+    /// for, which on a grey panel is bright and hard to read at this text size.
+    pub warning: Color32,
 
     /// Height of the ribbon toolbar. `PROVISIONAL`
     pub ribbon_height: f32,
@@ -82,6 +87,7 @@ impl ChromeTheme {
             selected_text: Color32::from_rgb(0x0A, 0x0A, 0x0A),
             tab_active_bg: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             tab_inactive_bg: Color32::from_rgb(0xE2, 0xE2, 0xE2),
+            warning: Color32::from_rgb(0xA6, 0x1B, 0x1B),
 
             // Measured from MobaXterm Professional 26.4.0.5512; see docs/ui-parity.md. The three
             // top bands together occupy 99 px in the reference, and the numbers below add up to

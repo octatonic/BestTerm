@@ -97,6 +97,20 @@ pub(crate) struct HostKeyRecord {
 }
 
 /// What happened to a connection attempt.
+/// What a connection is being opened for.
+///
+/// The handshake, the host key question, the vault lookup and the reconnect bookkeeping are the
+/// same work whether the tab that comes out shows a shell or a listing -- so this is a parameter
+/// rather than a second copy of [`connect`]. It is also the field that makes "session is not
+/// tab" concrete: the same connection can answer either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Purpose {
+    /// A shell channel, and a terminal to draw it.
+    Shell(GridSize),
+    /// An SFTP channel, and a file browser.
+    Files,
+}
+
 pub(crate) enum SessionEvent {
     /// It worked; here is the session.
     Opened {
@@ -133,6 +147,23 @@ pub(crate) enum SessionEvent {
         /// `None` where there is nothing to reconnect, which travels with `reconnect` being `Err`.
         target: Option<Box<SshConfig>>,
     },
+    /// A file browser is ready on a connection.
+    ///
+    /// Separate from `Opened` rather than a field on it: what comes out is a different kind of
+    /// pane with a different handle, and squeezing both through one variant would give every
+    /// reader of the event two fields of which exactly one is ever set.
+    FilesOpened {
+        /// Label for the tab.
+        title: String,
+        /// The handle commands go into.
+        session: bestterm_proto_sftp::FileSession,
+        /// Where the browser's own events arrive.
+        events: crossbeam_channel::Receiver<bestterm_proto_sftp::FileEvent>,
+        /// The connection underneath, held for the same reason as `Opened::session`.
+        connection: Arc<SshConnection>,
+        /// The key to append to `known_hosts`, when the person accepted a new one.
+        record: Option<HostKeyRecord>,
+    },
     /// It did not work.
     Failed {
         /// Label the attempt had, so the message can name it.
@@ -151,6 +182,11 @@ impl std::fmt::Debug for SessionEvent {
         match self {
             Self::Opened { title, record, .. } => f
                 .debug_struct("Opened")
+                .field("title", title)
+                .field("stores_a_key", &record.is_some())
+                .finish_non_exhaustive(),
+            Self::FilesOpened { title, record, .. } => f
+                .debug_struct("FilesOpened")
                 .field("title", title)
                 .field("stores_a_key", &record.is_some())
                 .finish_non_exhaustive(),
@@ -290,7 +326,7 @@ pub(crate) fn connect(
     config: SshConfig,
     auth: Auth,
     known_hosts_text: String,
-    size: GridSize,
+    purpose: Purpose,
     events: crossbeam_channel::Sender<SessionEvent>,
     waker: Arc<dyn Fn() + Send + Sync>,
 ) {
@@ -339,22 +375,45 @@ pub(crate) fn connect(
                     None => Err(NotReconnectable::Interactive),
                 };
 
-                // Wrapped before the shell is opened, so the only owner from here on is the one that
-                // travels with the transport.
+                // Wrapped before the channel is opened, so the only owner from here on is the one
+                // that travels with whichever pane this becomes.
                 let connection = Arc::new(connection);
-                match connection.open_shell(size, "xterm-256color").await {
-                    Ok(open) => SessionEvent::Opened {
-                        title,
-                        open: Box::new(open),
-                        session: Some(Arc::clone(&connection)),
-                        record,
-                        reconnect,
-                        target: Some(Box::new(config.clone())),
-                    },
-                    Err(error) => SessionEvent::Failed {
-                        title,
-                        reason: format!("connected, but could not open a shell: {error}"),
-                    },
+                match purpose {
+                    Purpose::Shell(size) => {
+                        match connection.open_shell(size, "xterm-256color").await {
+                            Ok(open) => SessionEvent::Opened {
+                                title,
+                                open: Box::new(open),
+                                session: Some(Arc::clone(&connection)),
+                                record,
+                                reconnect,
+                                target: Some(Box::new(config.clone())),
+                            },
+                            Err(error) => SessionEvent::Failed {
+                                title,
+                                reason: format!("connected, but could not open a shell: {error}"),
+                            },
+                        }
+                    }
+                    Purpose::Files => {
+                        // Started here rather than after the event is delivered, so the browser
+                        // has already asked the server where the account starts by the time its
+                        // tab draws its first frame -- and so a server that refuses the subsystem
+                        // says so through the browser's own events rather than as a connection
+                        // failure, which it is not.
+                        let (session, browser_events) = bestterm_proto_sftp::session::start(
+                            Arc::clone(&connection),
+                            title.clone(),
+                            Arc::clone(&waker),
+                        );
+                        SessionEvent::FilesOpened {
+                            title,
+                            session,
+                            events: browser_events,
+                            connection,
+                            record,
+                        }
+                    }
                 }
             }
             Err(error) => SessionEvent::Failed {

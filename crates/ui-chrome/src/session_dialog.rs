@@ -516,25 +516,7 @@ impl SessionDialog {
         match config {
             ProtocolConfig::Ssh(ssh) => {
                 self.protocol = DialogProtocol::Ssh;
-                self.fields.host = ssh.host.clone();
-                self.fields.port = ssh.port.to_string();
-                self.fields.user = ssh.user.clone().unwrap_or_default();
-                self.fields.compression = ssh.compression;
-                self.fields.execute_command = ssh.command.clone().unwrap_or_default();
-                self.fields.keep_open_after_command = ssh.keep_open_after_command;
-                if let bestterm_core_model::SshAuth::PublicKey { path, .. } = &ssh.auth {
-                    self.fields.use_private_key = true;
-                    self.fields.private_key = path.clone();
-                }
-                if let Some(proxy) = &ssh.proxy {
-                    self.fields.proxy_type = bestterm_core_model::ProxyKind::ALL
-                        .iter()
-                        .position(|kind| *kind == proxy.kind)
-                        .unwrap_or(0);
-                    self.fields.proxy_host = proxy.host.clone();
-                    self.fields.proxy_port = proxy.port.to_string();
-                    self.fields.proxy_login = proxy.login.clone().unwrap_or_default();
-                }
+                self.load_ssh(ssh);
             }
             ProtocolConfig::Telnet(telnet) => {
                 self.protocol = DialogProtocol::Telnet;
@@ -549,6 +531,12 @@ impl SessionDialog {
                 self.fields.domain = rdp.domain.clone().unwrap_or_default();
                 self.fields.rdp_clipboard = rdp.clipboard;
                 self.fields.rdp_multi_monitor = rdp.multi_monitor;
+            }
+            ProtocolConfig::Sftp(ssh) => {
+                // The same fields as SSH, on the SFTP tab. Reusing the loader rather than
+                // repeating it, for the same reason the producer is shared.
+                self.load_ssh(ssh);
+                self.protocol = DialogProtocol::Sftp;
             }
             ProtocolConfig::Vnc(vnc) => {
                 self.protocol = DialogProtocol::Vnc;
@@ -591,6 +579,62 @@ impl SessionDialog {
         }
     }
 
+    /// Put SSH connection details into the fields.
+    ///
+    /// Shared with SFTP, which has the same ones: the host, the account, the key, the proxy. A
+    /// second copy would be a second place for the proxy lookup to fall behind `ProxyKind::ALL`.
+    fn load_ssh(&mut self, ssh: &SshConfig) {
+        self.fields.host = ssh.host.clone();
+        self.fields.port = ssh.port.to_string();
+        self.fields.user = ssh.user.clone().unwrap_or_default();
+        self.fields.compression = ssh.compression;
+        self.fields.execute_command = ssh.command.clone().unwrap_or_default();
+        self.fields.keep_open_after_command = ssh.keep_open_after_command;
+        if let bestterm_core_model::SshAuth::PublicKey { path, .. } = &ssh.auth {
+            self.fields.use_private_key = true;
+            self.fields.private_key = path.clone();
+        }
+        if let Some(proxy) = &ssh.proxy {
+            self.fields.proxy_type = bestterm_core_model::ProxyKind::ALL
+                .iter()
+                .position(|kind| *kind == proxy.kind)
+                .unwrap_or(0);
+            self.fields.proxy_host = proxy.host.clone();
+            self.fields.proxy_port = proxy.port.to_string();
+            self.fields.proxy_login = proxy.login.clone().unwrap_or_default();
+        }
+    }
+
+    /// The connection details behind an SSH session and behind an SFTP one.
+    ///
+    /// One builder because they are the same fields with the same meanings. Two copies would be two
+    /// places for the private-key rule below to be got right in only one of them.
+    fn ssh_config(&self, host: &str, port: u16, user: Option<String>) -> SshConfig {
+        let command = self.fields.execute_command.trim();
+        let key = self.fields.private_key.trim();
+        SshConfig {
+            host: host.to_owned(),
+            port,
+            user,
+            // A key only when the box is ticked *and* a path was given: a ticked box with nothing
+            // in it would produce a session that authenticates against an empty path, which fails
+            // in a way that reads as a broken key rather than a blank field.
+            auth: if self.fields.use_private_key && !key.is_empty() {
+                bestterm_core_model::SshAuth::PublicKey {
+                    path: key.to_owned(),
+                    passphrase: None,
+                }
+            } else {
+                bestterm_core_model::SshAuth::Agent
+            },
+            command: (!command.is_empty()).then(|| command.to_owned()),
+            keep_open_after_command: self.fields.keep_open_after_command,
+            compression: self.fields.compression,
+            proxy: self.proxy(),
+            ..SshConfig::default()
+        }
+    }
+
     /// Carry what this dialog collected back onto an existing session.
     ///
     /// Not a replacement. `ProtocolConfig` holds things the dialog has no field for, and building a
@@ -600,31 +644,14 @@ impl SessionDialog {
     pub fn merge_into(produced: ProtocolConfig, existing: &mut ProtocolConfig) {
         match (produced, existing) {
             (ProtocolConfig::Ssh(new), ProtocolConfig::Ssh(old)) => {
-                old.host = new.host;
-                old.port = new.port;
-                old.user = new.user;
-                old.command = new.command;
-                old.keep_open_after_command = new.keep_open_after_command;
-                old.compression = new.compression;
-                old.proxy = new.proxy;
-                // `auth` moves only when the dialog actually said something about it, which is the
-                // one rule this merge exists for. `SshAuth` has more shapes than the dialog has
-                // fields -- a vault password, a keyboard-interactive login, the external `ssh`
-                // binary -- and copying a default over the top of one of those is the bug that left
-                // 128 imported sessions authenticating with an agent that was not running.
-                match new.auth {
-                    // A key was named, so that is a choice.
-                    bestterm_core_model::SshAuth::PublicKey { .. } => old.auth = new.auth,
-                    // The box was cleared on a session that had a key, which is also a choice: back
-                    // to the agent.
-                    bestterm_core_model::SshAuth::Agent
-                        if matches!(old.auth, bestterm_core_model::SshAuth::PublicKey { .. }) =>
-                    {
-                        old.auth = bestterm_core_model::SshAuth::Agent;
-                    }
-                    // Anything else the dialog produced is a default it had no field for.
-                    _ => {}
-                }
+                merge_ssh(new, old);
+            }
+            // The same rules as SSH, including the one about `auth`: an SFTP session's key is a
+            // key, and a dialog that had nothing to say about it must not overwrite one.
+            (ProtocolConfig::Sftp(new), ProtocolConfig::Sftp(old))
+            | (ProtocolConfig::Ssh(new), ProtocolConfig::Sftp(old))
+            | (ProtocolConfig::Sftp(new), ProtocolConfig::Ssh(old)) => {
+                merge_ssh(new, old);
             }
             (ProtocolConfig::Telnet(new), ProtocolConfig::Telnet(old)) => *old = new,
             (ProtocolConfig::Rdp(new), ProtocolConfig::Rdp(old)) => {
@@ -808,32 +835,14 @@ impl SessionDialog {
         let optional_user = (!user.is_empty()).then(|| user.to_owned());
 
         match self.protocol {
-            DialogProtocol::Ssh => {
-                let command = self.fields.execute_command.trim();
-                let key = self.fields.private_key.trim();
-                DialogOutcome::Accepted(Box::new(ProtocolConfig::Ssh(SshConfig {
-                    host: host.to_owned(),
-                    port,
-                    user: optional_user,
-                    // A key only when the box is ticked *and* a path was given: a ticked box with
-                    // nothing in it would produce a session that authenticates against an empty
-                    // path, which fails in a way that reads as a broken key rather than a blank
-                    // field.
-                    auth: if self.fields.use_private_key && !key.is_empty() {
-                        bestterm_core_model::SshAuth::PublicKey {
-                            path: key.to_owned(),
-                            passphrase: None,
-                        }
-                    } else {
-                        bestterm_core_model::SshAuth::Agent
-                    },
-                    command: (!command.is_empty()).then(|| command.to_owned()),
-                    keep_open_after_command: self.fields.keep_open_after_command,
-                    compression: self.fields.compression,
-                    proxy: self.proxy(),
-                    ..SshConfig::default()
-                })))
-            }
+            DialogProtocol::Ssh => DialogOutcome::Accepted(Box::new(ProtocolConfig::Ssh(
+                self.ssh_config(host, port, optional_user),
+            ))),
+            // The same connection, a different tab. SFTP is its own protocol in the reference's
+            // list and its own here, and the fields it needs are the ones SSH needs.
+            DialogProtocol::Sftp => DialogOutcome::Accepted(Box::new(ProtocolConfig::Sftp(
+                self.ssh_config(host, port, optional_user),
+            ))),
             DialogProtocol::Telnet => {
                 DialogOutcome::Accepted(Box::new(ProtocolConfig::Telnet(TelnetConfig {
                     host: host.to_owned(),
@@ -1660,6 +1669,39 @@ fn starting_directory(current: &str) -> Option<std::path::PathBuf> {
     directory.is_dir().then(|| directory.to_path_buf())
 }
 
+/// Move an edited SSH configuration onto an existing one.
+///
+/// A free function rather than a method because it is called with the two halves of a `match`
+/// already destructured, and because SFTP shares it: the same fields, the same `auth` rule, and one
+/// place for both.
+fn merge_ssh(new: SshConfig, old: &mut SshConfig) {
+    old.host = new.host;
+    old.port = new.port;
+    old.user = new.user;
+    old.command = new.command;
+    old.keep_open_after_command = new.keep_open_after_command;
+    old.compression = new.compression;
+    old.proxy = new.proxy;
+    // `auth` moves only when the dialog actually said something about it, which is the
+    // one rule this merge exists for. `SshAuth` has more shapes than the dialog has
+    // fields -- a vault password, a keyboard-interactive login, the external `ssh`
+    // binary -- and copying a default over the top of one of those is the bug that left
+    // 128 imported sessions authenticating with an agent that was not running.
+    match new.auth {
+        // A key was named, so that is a choice.
+        bestterm_core_model::SshAuth::PublicKey { .. } => old.auth = new.auth,
+        // The box was cleared on a session that had a key, which is also a choice: back
+        // to the agent.
+        bestterm_core_model::SshAuth::Agent
+            if matches!(old.auth, bestterm_core_model::SshAuth::PublicKey { .. }) =>
+        {
+            old.auth = bestterm_core_model::SshAuth::Agent;
+        }
+        // Anything else the dialog produced is a default it had no field for.
+        _ => {}
+    }
+}
+
 /// A dropdown over a fixed list of labels, selected by index.
 ///
 /// An index rather than an enum per list: the lists are measured strings, several of them name things
@@ -2168,6 +2210,70 @@ mod tests {
             "an impossible framing shows as the default"
         );
         assert_eq!(STOP_BITS[dialog.fields.serial_stop_bits], "1");
+    }
+
+    #[test]
+    fn the_sftp_tab_produces_a_session_rather_than_a_refusal() {
+        // It answered `Unsupported` until now, so the tab was in the strip and could not make
+        // anything. The fields it collects are SSH's, because the connection is SSH -- what differs
+        // is that the tab which opens shows a listing instead of a shell.
+        let mut dialog = SessionDialog {
+            protocol: DialogProtocol::Sftp,
+            ..SessionDialog::default()
+        };
+        dialog.set_port_for_protocol();
+        dialog.fields.host = "host.invalid".to_owned();
+        dialog.fields.user = "someone".to_owned();
+        dialog.fields.use_private_key = true;
+        dialog.fields.private_key = "C:/keys/id_ed25519".to_owned();
+
+        match dialog.build() {
+            DialogOutcome::Accepted(config) => match *config {
+                ProtocolConfig::Sftp(ssh) => {
+                    assert_eq!(ssh.host, "host.invalid");
+                    assert_eq!(ssh.port, 22, "the same port as SSH, because it is SSH");
+                    assert_eq!(ssh.user.as_deref(), Some("someone"));
+                    assert!(matches!(
+                        ssh.auth,
+                        bestterm_core_model::SshAuth::PublicKey { .. }
+                    ));
+                }
+                other => panic!("the SFTP tab produced {other:?}"),
+            },
+            other => panic!("the SFTP tab refused a complete session: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switching_a_saved_session_between_ssh_and_sftp_keeps_its_tunnels() {
+        // Changing the protocol is normally a replacement, because nothing of the old configuration
+        // means anything under the new one. These two are the exception: the connection is the same,
+        // so a bastion chain and a set of port forwards still mean exactly what they meant -- and
+        // somebody who changes a session from shell to files should not lose them.
+        let bastion = bestterm_core_model::NodeId::new();
+        let mut target = ProtocolConfig::Ssh(SshConfig {
+            host: "host.invalid".to_owned(),
+            port: 22,
+            jump_hosts: vec![bastion],
+            ..SshConfig::default()
+        });
+
+        let mut dialog = SessionDialog::default();
+        dialog.open_for(&target);
+        dialog.protocol = DialogProtocol::Sftp;
+        match dialog.build() {
+            DialogOutcome::Accepted(produced) => SessionDialog::merge_into(*produced, &mut target),
+            other => panic!("the dialog refused the session: {other:?}"),
+        }
+
+        let ProtocolConfig::Ssh(ssh) = &target else {
+            panic!("the merge replaced the session instead of editing it: {target:?}")
+        };
+        assert_eq!(
+            ssh.jump_hosts,
+            vec![bastion],
+            "the bastion chain means the same thing to a file browser"
+        );
     }
 
     #[test]

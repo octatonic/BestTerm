@@ -95,8 +95,8 @@ open a session.
 | Telnet · Serial | done. Both are byte streams, so they plug into `Transport` and the terminal pane renders them with no further work |
 | Rsh | absent. The reference calls this tab `Rsh`, not `Rlogin` — they are different protocols on different ports, and this list said the wrong one until somebody read the dialog |
 | VNC | built end to end, including its own helper process. Never run against a real server. Raw, CopyRect and ZRLE; Tight is absent, and it is an *encoding* rather than a protocol — a bandwidth optimisation on top of ZRLE, which every server supports |
-| SFTP | absent, and it is the release condition for 1.0. Needs a pane kind that is neither a terminal nor a surface |
-| FTP | absent; would share whatever browser SFTP gets |
+| SFTP | present as a session type: a two-panel browser, transfers with resume, and a listing on the connection a terminal is already using. No drag and drop, no recursive copy or delete, no remote editing, no queue that survives a restart |
+| FTP | absent; the browser it would share now exists |
 | Xdmcp · Mosh · Aws S3 · Browser · File | absent, and none is scheduled. Two are open questions rather than work items: `Browser` collides with the "no webview" decision, and `Aws S3` is a storage API rather than a remote-access protocol |
 
 ### Phase 1, which was skipped past

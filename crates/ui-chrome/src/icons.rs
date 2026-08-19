@@ -120,6 +120,8 @@ impl Icon {
         match id {
             "rdp" => Self::Rdp,
             "vnc" => Self::Vnc,
+            // A file browser is not a terminal, and the fallback would have made it look like one.
+            "sftp" | "ftp" => Self::Folder,
             _ => Self::Session,
         }
     }

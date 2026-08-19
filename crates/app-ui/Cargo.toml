@@ -30,6 +30,7 @@ bestterm-helper-surface.workspace = true
 # what goes in it comes from the session model, which lives here.
 bestterm-ipc-frame.workspace = true
 bestterm-proto-serial.workspace = true
+bestterm-proto-sftp.workspace = true
 bestterm-proto-ssh.workspace = true
 bestterm-proto-telnet.workspace = true
 bestterm-core-terminal.workspace = true

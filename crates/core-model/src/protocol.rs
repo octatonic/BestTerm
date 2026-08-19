@@ -46,6 +46,24 @@ pub enum Protocol {
     Rdp,
     /// VNC / RFB.
     Vnc,
+    /// SFTP: a file browser rather than a terminal.
+    ///
+    /// Its own protocol in the reference's session list, and its own protocol here, even though
+    /// the connection underneath is SSH. What differs is what the tab shows, and that is exactly
+    /// the distinction a protocol is: an SFTP session opens a browser, an SSH session opens a
+    /// shell, and both may be the same host with the same key.
+    Sftp,
+}
+
+/// What a session of a given protocol puts on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Presentation {
+    /// A grid of characters, over a byte stream.
+    Text,
+    /// A framebuffer, over a stream of frames and input events.
+    Frames,
+    /// A listing of files, over a request-and-answer protocol.
+    Files,
 }
 
 impl Protocol {
@@ -58,17 +76,23 @@ impl Protocol {
             Self::Serial => "serial",
             Self::Rdp => "rdp",
             Self::Vnc => "vnc",
+            Self::Sftp => "sftp",
         }
     }
 
-    /// Whether this protocol presents as a character grid rather than a framebuffer.
+    /// What kind of thing a session of this protocol shows.
     ///
-    /// Decides which of the two protocol abstractions a session will use — `Transport` or
-    /// `GraphicalSurface`. See `docs/ARCHITECTURE.md`.
-    pub fn is_text(self) -> bool {
+    /// Decides which abstraction a session uses: `Transport` for a character stream,
+    /// `GraphicalSurface` for frames, and neither for a file browser. See `docs/ARCHITECTURE.md`.
+    ///
+    /// This was `is_text`, a bool, when there were only the two. SFTP is the third: a file browser
+    /// is not a character grid, and answering `false` would have said it was a framebuffer -- a
+    /// wrong answer rather than a missing one, which is the sort a bool cannot avoid giving.
+    pub fn presentation(self) -> Presentation {
         match self {
-            Self::LocalShell | Self::Ssh | Self::Telnet | Self::Serial => true,
-            Self::Rdp | Self::Vnc => false,
+            Self::LocalShell | Self::Ssh | Self::Telnet | Self::Serial => Presentation::Text,
+            Self::Rdp | Self::Vnc => Presentation::Frames,
+            Self::Sftp => Presentation::Files,
         }
     }
 }
@@ -89,6 +113,13 @@ pub enum ProtocolConfig {
     Rdp(RdpConfig),
     /// VNC / RFB.
     Vnc(VncConfig),
+    /// SFTP, over the same connection details as SSH.
+    ///
+    /// Deliberately reusing [`SshConfig`] rather than declaring a near-copy of it: the host, the
+    /// account, the key, the jump chain and the proxy are the same fields with the same meanings,
+    /// and a second struct would be a second place for them to drift apart. The command and the
+    /// keep-open flag are simply unused, which costs nothing.
+    Sftp(SshConfig),
 }
 
 impl ProtocolConfig {
@@ -101,6 +132,7 @@ impl ProtocolConfig {
             Self::Serial(_) => Protocol::Serial,
             Self::Rdp(_) => Protocol::Rdp,
             Self::Vnc(_) => Protocol::Vnc,
+            Self::Sftp(_) => Protocol::Sftp,
         }
     }
 
@@ -114,6 +146,7 @@ impl ProtocolConfig {
             Self::Telnet(c) => Some(&c.host),
             Self::Rdp(c) => Some(&c.host),
             Self::Vnc(c) => Some(&c.host),
+            Self::Sftp(c) => Some(&c.host),
             Self::Serial(c) => Some(&c.device),
             Self::LocalShell(_) => None,
         }
@@ -129,6 +162,7 @@ impl ProtocolConfig {
             Self::Telnet(c) => Some(c.port),
             Self::Rdp(c) => Some(c.port),
             Self::Vnc(c) => Some(c.port),
+            Self::Sftp(c) => Some(c.port),
             Self::Serial(_) | Self::LocalShell(_) => None,
         }
     }
@@ -146,6 +180,10 @@ impl ProtocolConfig {
             Self::Telnet(c) => format!("{}:{}", c.host, c.port),
             Self::Serial(c) => format!("{} @ {}", c.device, c.baud),
             Self::Rdp(c) => format!("{}:{}", c.host, c.port),
+            Self::Sftp(c) => match &c.user {
+                Some(user) => format!("{user}@{}:{} (files)", c.host, c.port),
+                None => format!("{}:{} (files)", c.host, c.port),
+            },
             Self::Vnc(c) => format!("{}:{}", c.host, c.port),
         }
     }
@@ -526,12 +564,15 @@ mod tests {
     #[test]
     fn text_and_frame_protocols_are_split_correctly() {
         // This split decides which abstraction a session uses, so it is worth pinning.
-        assert!(Protocol::Ssh.is_text());
-        assert!(Protocol::LocalShell.is_text());
-        assert!(Protocol::Telnet.is_text());
-        assert!(Protocol::Serial.is_text());
-        assert!(!Protocol::Rdp.is_text());
-        assert!(!Protocol::Vnc.is_text());
+        assert_eq!(Protocol::Ssh.presentation(), Presentation::Text);
+        assert_eq!(Protocol::LocalShell.presentation(), Presentation::Text);
+        assert_eq!(Protocol::Telnet.presentation(), Presentation::Text);
+        assert_eq!(Protocol::Serial.presentation(), Presentation::Text);
+        assert_eq!(Protocol::Rdp.presentation(), Presentation::Frames);
+        assert_eq!(Protocol::Vnc.presentation(), Presentation::Frames);
+        // The third kind, and the reason this stopped being a bool: a file browser is not a
+        // character grid, and `false` would have claimed it was a framebuffer.
+        assert_eq!(Protocol::Sftp.presentation(), Presentation::Files);
     }
 
     #[test]

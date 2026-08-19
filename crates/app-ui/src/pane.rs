@@ -1,9 +1,13 @@
 //! What a tab holds.
 //!
-//! Two things, so far: a terminal over a byte stream, and a desktop over a frame stream. The plan
-//! called for this from the start — "a `Pane` knows how to hold either of the two from day one" — and
-//! until now there was only ever one of them, so the enum did not exist and every caller said
-//! `TerminalTab`.
+//! Three things: a terminal over a byte stream, a desktop over a frame stream, and a file browser
+//! over a request-and-answer protocol. The plan called for the first two from the start — "a `Pane`
+//! knows how to hold either of the two from day one" — and until there were two, the enum did not
+//! exist and every caller said `TerminalTab`.
+//!
+//! The third is the one that proved the arrangement was worth having: adding it touched this file,
+//! the central panel, and nothing else. The tab bar, the status bar and closing a tab did not have
+//! to learn that file browsers exist.
 //!
 //! The point of it is not the two variants. It is that everything above this — the tab bar, the
 //! status bar, closing a tab, choosing which is active — asks a `Pane` a question and does not
@@ -11,6 +15,7 @@
 //! stopped earning its place; the one place that legitimately does is the central panel, where a grid
 //! of glyphs and a texture genuinely are different work.
 
+use crate::files_tab::FilesTab;
 use crate::surface_tab::SurfaceTab;
 use crate::tab::TerminalTab;
 use crate::tunnels::ConnectionId;
@@ -24,6 +29,8 @@ pub(crate) enum Pane {
     Terminal(Box<TerminalTab>),
     /// A remote desktop.
     Surface(Box<SurfaceTab>),
+    /// A file browser on an SSH connection.
+    Files(Box<FilesTab>),
 }
 
 impl Pane {
@@ -32,6 +39,7 @@ impl Pane {
         match self {
             Self::Terminal(tab) => tab.title(),
             Self::Surface(tab) => tab.title().to_string(),
+            Self::Files(tab) => tab.title().to_string(),
         }
     }
 
@@ -42,7 +50,9 @@ impl Pane {
     pub(crate) fn program_title(&self) -> Option<String> {
         match self {
             Self::Terminal(tab) => tab.program_title(),
-            Self::Surface(_) => None,
+            // Neither has one. A desktop's remote end has many windows and no single title; a file
+            // browser has no program in it at all.
+            Self::Surface(_) | Self::Files(_) => None,
         }
     }
 
@@ -51,6 +61,7 @@ impl Pane {
         match self {
             Self::Terminal(tab) => tab.protocol().to_string(),
             Self::Surface(tab) => tab.kind().id().to_string(),
+            Self::Files(_) => bestterm_core_model::Protocol::Sftp.id().to_string(),
         }
     }
 
@@ -59,6 +70,7 @@ impl Pane {
         match self {
             Self::Terminal(tab) => tab.status_line(),
             Self::Surface(tab) => tab.status_line(),
+            Self::Files(tab) => tab.status_line(),
         }
     }
 
@@ -69,7 +81,7 @@ impl Pane {
     pub(crate) fn grid(&self) -> (usize, usize) {
         match self {
             Self::Terminal(tab) => tab.grid(),
-            Self::Surface(_) => (0, 0),
+            Self::Surface(_) | Self::Files(_) => (0, 0),
         }
     }
 
@@ -78,6 +90,7 @@ impl Pane {
         match self {
             Self::Terminal(tab) => tab.connection,
             Self::Surface(_) => None,
+            Self::Files(tab) => tab.connection,
         }
     }
 
@@ -86,6 +99,7 @@ impl Pane {
         match self {
             Self::Terminal(tab) => tab.pump(),
             Self::Surface(tab) => tab.pump(ctx),
+            Self::Files(tab) => tab.pump(),
         }
     }
 
@@ -94,6 +108,7 @@ impl Pane {
         match self {
             Self::Terminal(tab) => tab.shutdown(),
             Self::Surface(tab) => tab.shutdown(),
+            Self::Files(tab) => tab.shutdown(),
         }
     }
 
@@ -105,7 +120,7 @@ impl Pane {
     pub(crate) fn surface_mut(&mut self) -> Option<&mut SurfaceTab> {
         match self {
             Self::Surface(tab) => Some(tab),
-            Self::Terminal(_) => None,
+            Self::Terminal(_) | Self::Files(_) => None,
         }
     }
 }
@@ -115,11 +130,12 @@ mod tests {
     use super::*;
 
     /// The property this enum exists for, checked on the shape of the code rather than at run time:
-    /// every question above is answerable by both variants, so nothing above `Pane` has to know
+    /// every question above is answerable by every variant, so nothing above `Pane` has to know
     /// which it is holding. A new variant that cannot answer one of them will not compile, which is
-    /// the whole mechanism.
+    /// the whole mechanism -- and it is what happened when the file browser was added: this file and
+    /// the central panel, and nothing else.
     #[test]
-    fn both_variants_answer_every_question() {
+    fn every_variant_answers_every_question() {
         fn assert_total(pane: &Pane) {
             let _ = pane.title();
             let _ = pane.program_title();
