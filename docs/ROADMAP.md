@@ -114,8 +114,14 @@ The interface was built before the renderer it assumed.
 ### Chrome measured only at the top
 
 * Eight menus have the right titles and placeholder items.
-* The session dialog has all fifteen tabs; only `Basic` is measured. Advanced, Terminal, Network and
-  Bookmark are unmeasured for every protocol.
+* The session dialog has all fifteen tabs. `Basic` is measured for every protocol, and SSH's
+  Advanced, Terminal, Network and Bookmark tabs are measured against the reference.
+* RDP and VNC have real advanced tabs, but smaller than the reference's: they carry the settings the
+  session model holds, so every control changes something that is saved. RDP's domain is acted on;
+  its clipboard and multi-monitor flags are stored and not yet acted on. VNC's `view only` is acted
+  on. Display resolution, sound, device redirection and gateways for RDP, and scaling, colour depth
+  and the encoding list for VNC, are not there at all.
+* The other twelve protocols' advanced tabs say plainly that they have not been measured.
 * The Configuration dialog has its seven tabs; only `General` is measured.
 * The Tools and Macros sidebar panels are catalogues with no behaviour behind them.
 
