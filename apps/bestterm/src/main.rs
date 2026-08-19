@@ -16,6 +16,13 @@ fn main() -> eframe::Result {
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting BestTerm");
 
+    if let Err(missing) = check_shared_libraries() {
+        // Deliberately on stderr and not through `tracing`: this is the one message somebody who
+        // cannot start the program at all has to see, and the log may be going anywhere.
+        eprintln!("{missing}");
+        std::process::exit(1);
+    }
+
     let startup = parse_arguments();
 
     let options = eframe::NativeOptions {
@@ -31,6 +38,76 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |_cc| Ok(Box::new(BestTermApp::with_startup(startup)))),
     )
+}
+
+/// Check for the shared libraries whose absence aborts rather than degrades.
+///
+/// This exists because of what happens without it. On a Linux machine running X11 without
+/// `libxkbcommon-x11`, `winit` panics inside a dependency while the event loop is being built --
+/// and because release builds abort on panic, what a person sees is:
+///
+/// ```text
+/// Aborted (core dumped)
+/// ```
+///
+/// A window that never appears and a core file. Nothing about which library, nothing about which
+/// package. It cannot be caught: `catch_unwind` does not see an abort, and the panic is three crates
+/// down inside code we do not call directly. So it is checked before anything can touch it.
+///
+/// Only the libraries that are loaded by name at run time, and only for the display server that is
+/// actually going to be used: on a Wayland session the X11 library is never opened, and demanding it
+/// there would refuse to start a program that would have worked.
+#[cfg(target_os = "linux")]
+fn check_shared_libraries() -> Result<(), String> {
+    // Wayland wins when both are set, which is what `winit` does: a session with `WAYLAND_DISPLAY`
+    // set is a Wayland session, and `DISPLAY` beside it is XWayland for programs that need it.
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let x11 = !wayland && std::env::var_os("DISPLAY").is_some();
+
+    let mut needed: Vec<(&str, &str)> = vec![("libxkbcommon.so.0", "libxkbcommon0")];
+    if x11 {
+        needed.push(("libxkbcommon-x11.so.0", "libxkbcommon-x11-0"));
+    }
+
+    let mut missing: Vec<(&str, &str)> = Vec::new();
+    for (library, package) in needed {
+        // SAFETY: opening a library runs its initialisers, which for these is nothing but setting up
+        // tables. They are the same libraries the windowing layer is about to open by the same names;
+        // doing it here first only moves the failure somewhere it can be explained.
+        let opened = unsafe { libloading::Library::new(library) };
+        if opened.is_err() {
+            missing.push((library, package));
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut message =
+        String::from("BestTerm cannot start: a shared library it needs is not installed.\n");
+    for (library, package) in &missing {
+        message.push_str(&format!("  {library} (Debian and Ubuntu: {package})\n"));
+    }
+    // Named per distribution because the package names differ and the plan commits to Ubuntu, Debian
+    // and Arch. Somebody reading this is stuck, and "install the right package" is not help.
+    message.push_str(
+        "\nInstall it with one of:\n\
+         \x20 Debian, Ubuntu:  sudo apt install libxkbcommon0 libxkbcommon-x11-0\n\
+         \x20 Arch:            sudo pacman -S libxkbcommon libxkbcommon-x11\n\
+         \x20 Fedora:          sudo dnf install libxkbcommon libxkbcommon-x11\n",
+    );
+    Err(message)
+}
+
+/// Nothing to check.
+///
+/// Windows resolves what it needs at load time: a missing DLL is reported by the loader, with the
+/// name of the file, before `main` runs -- which is the message this function exists to produce on
+/// the platform that does not.
+#[cfg(not(target_os = "linux"))]
+fn check_shared_libraries() -> Result<(), String> {
+    Ok(())
 }
 
 /// Read the command line.

@@ -290,6 +290,7 @@ dependencies = [
  "bestterm-app-ui",
  "eframe",
  "egui",
+ "libloading",
  "tracing",
  "tracing-subscriber",
 ]

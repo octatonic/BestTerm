@@ -119,6 +119,9 @@ flate2 = "1.1"
 # The default features are the right ones: the XDG portal on Linux, which works under Wayland and
 # X11 alike and needs no GTK at build time, and the Win32 common dialog on Windows.
 rfd = "0.17"
+# Already in the tree through wgpu, so this adds no new third party -- only a direct name for it.
+# Used once, on Linux, to open a library before the windowing layer does; see apps/bestterm.
+libloading = "0.8"
 serialport = { version = "4.7", default-features = false }
 sha2 = "0.11"
 

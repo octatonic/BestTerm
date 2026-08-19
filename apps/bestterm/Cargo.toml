@@ -22,3 +22,8 @@ eframe.workspace = true
 egui.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+# Only on Linux, and only to open a library by name before the windowing layer does -- which turns a
+# missing `libxkbcommon-x11` from an abort with a core dump into a sentence naming the package.
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading.workspace = true

@@ -32,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The last line is a run-time dependency rather than a build one, and it is here because the
+      # self-check found its absence the hard way: without libxkbcommon-x11 the application aborts
+      # with a core dump when it opens a window on X11. `libxkbcommon-dev` does not pull it in.
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -40,7 +43,8 @@ jobs:
             build-essential pkg-config \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libwayland-dev libssl-dev \
-            xvfb mesa-vulkan-drivers libgl1-mesa-dri
+            xvfb mesa-vulkan-drivers libgl1-mesa-dri \
+            libxkbcommon-x11-0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
